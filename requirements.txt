@@ -1,0 +1,4 @@
+numpy>=1.26
+pytest>=8.0
+matplotlib>=3.8          # plots only (Part 4)
+scikit-learn>=1.4        # ONLY to download/load MNIST. Never for models, training or gradients.

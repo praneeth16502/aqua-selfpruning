@@ -1,0 +1,14 @@
+[project]
+name = "aqua-selfpruning"
+version = "0.1.0"
+description = "From-scratch NumPy autodiff + self-pruning network (AQUA hiring challenge)"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+plots = ["matplotlib>=3.8"]
+data = ["scikit-learn>=1.4"]   # dataset loading only
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
