@@ -18,9 +18,11 @@ class Adam:
         momentum from a different loss landscape.  Demonstrated in tests/test_masked.py.
       * Freeze m, v (keep but don't update): same staleness, just delayed.
     Why per-element t: Adam's bias correction 1/(1-beta^t) assumes moments started at 0 at
-    step 0.  A revived entry restarts from 0, so with a global t its first update would be
-    ~lr*(1-b1)/sqrt(1-b2) ~ 3.2*lr (spike).  With its own t=1 the first update is exactly
-    ~lr*sign(g): bounded and in the descent direction of the CURRENT gradient.
+    step 0.  A revived entry restarts from 0, so with a GLOBAL t its first update would be
+    lr*(1-b1)/sqrt(1-b2) = 3.16*lr once t >> 1/(1-b2) (measured: 0.74x at t=56, 2.5x at
+    t=1000, 3.16x at t>=1e4) - a spike whose size depends on when you revive.  With its own
+    t=1 the first update is ~lr*sign(g): bounded, independent of the global step, and in the
+    descent direction of the CURRENT gradient.
 
     Only `p.grad` (the update gradient) is ever read.  `p.dense_grad` is never touched.
     `reset_state_on_mask_change=False` gives the stale-state ablation used in tests.
