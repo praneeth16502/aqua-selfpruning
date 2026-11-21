@@ -25,3 +25,15 @@ python -m pytest -q tests/test_gradcheck.py          # gradient-check suite (Par
 python -m pytest -q tests/test_masked.py             # masked-weight correctness (Part 1)
 python -m tests.run                                  # stdlib-only fallback runner (no pytest needed)
 ```
+
+## Status
+- [x] Step 1: autodiff engine, broadcast-correct backward, fused softmax-CE, mask-aware `Parameter` + Adam, tests
+- [ ] Step 2: MLP + training on MNIST (architecture locked there)
+- [ ] Step 3: saliency pruning + cubic ramp + regrowth
+- [ ] Step 4: Pareto sweep, sparse-aware cost measurement, seeds, falsifiable claim
+
+## Masked weights in one paragraph
+`Parameter.masked()` returns `where(mask, w, 0)`. Backward stores **two** gradients: `grad = mask·g`
+(the only one the optimizer reads) and `dense_grad = g` (saliency / regrowth signal, never fed to the
+optimizer). Adam drops moments of pruned entries and restarts revived ones from zero state with a
+per-element step count. Details and measurements: `DESIGN.md`.
