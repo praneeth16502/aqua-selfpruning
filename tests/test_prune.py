@@ -1,0 +1,184 @@
+"""Step 3: schedule, allocation, hard budget, honest masking, and criterion behaviour."""
+import numpy as np
+
+from engine import Parameter
+from nn.layers import MLP
+from nn.optim import Adam
+from prune import Magnitude, PruneManager, Saliency, allocate_keep, cubic_sparsity
+from train.data import make_split
+from train.loop import evaluate, train
+
+
+# ---------------------------------------------------------------- schedule
+def test_cubic_endpoints_and_shape():
+    assert cubic_sparsity(0, 10, 110, 0.9) == 0.0
+    assert cubic_sparsity(10, 10, 110, 0.9) == 0.0
+    assert cubic_sparsity(110, 10, 110, 0.9) == 0.9
+    assert cubic_sparsity(10_000, 10, 110, 0.9) == 0.9
+    s = np.array([cubic_sparsity(t, 10, 110, 0.9) for t in range(10, 111)])
+    d = np.diff(s)
+    assert np.all(d >= 0)                     # monotone
+    assert np.all(np.diff(d) <= 1e-12)        # concave: cuts hardest early, gently late
+    assert abs(cubic_sparsity(60, 10, 110, 0.9) - 0.9 * (1 - 0.5 ** 3)) < 1e-12
+
+
+def test_cubic_rejects_bad_args():
+    for args in [(0, 0, 0, 0.5), (0, 0, 10, 1.0), (0, 0, 10, -0.1)]:
+        try:
+            cubic_sparsity(*args)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {args}")
+
+
+# ---------------------------------------------------------------- allocation
+def test_allocate_keeps_exact_count_top_scores_and_floors():
+    r = np.random.default_rng(0)
+    scores = [r.random((20, 10)), r.random((10, 3)) * 1e-3]  # layer 2 globally "worse" everywhere
+    live = [np.ones((20, 10), bool), np.ones((10, 3), bool)]
+    new = allocate_keep(scores, live, keep_total=40, min_keep=[0, 5])
+    assert sum(int(m.sum()) for m in new) == 40
+    assert new[1].sum() == 5                                   # floor rescued the small layer
+    assert set(np.flatnonzero(new[1])) == set(np.argsort(-scores[1].ravel())[:5])
+    kept0 = np.sort(scores[0][new[0]])
+    dropped0 = scores[0][~new[0]]
+    assert kept0.min() >= dropped0.max()                       # global part is a true top-k
+
+
+def test_allocate_never_revives_and_rejects_impossible_budgets():
+    s = [np.arange(12.0).reshape(3, 4)]
+    live = [np.zeros((3, 4), bool)]
+    live[0][0, :2] = True                                      # only 2 live, and they have the LOWEST scores
+    new = allocate_keep(s, live, 2, [0])
+    assert np.array_equal(new[0], live[0])
+    for keep, floor in [(3, [0]), (1, [2])]:
+        try:
+            allocate_keep(s, live, keep, floor)
+        except ValueError:
+            continue
+        raise AssertionError("impossible budget accepted")
+
+
+# ---------------------------------------------------------------- criteria
+def test_saliency_is_ema_of_abs_w_times_dense_grad_and_needs_warmup():
+    p = Parameter(np.array([[1.0, -2.0]]))
+    sal = Saliency(decay=0.5)
+    try:
+        sal.scores([p])
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("scored with no observations")
+    for g in ([1.0, 1.0], [-1.0, 3.0]):        # signed gradients that cancel for w0
+        p.dense_grad = np.array([g])
+        sal.observe([p])
+    # raw EMA: 0.5*(0.5*|w g1|) + 0.5*|w g2| ; bias correction 1 - 0.5^2
+    want = (0.25 * np.abs(p.data * [1.0, 1.0]) + 0.5 * np.abs(p.data * [-1.0, 3.0])) / 0.75
+    np.testing.assert_allclose(sal.scores([p])[0], want)
+    assert sal.scores([p])[0][0, 0] > 0        # |w * mean g| would be 0 for w0: the reason we average |w g|
+
+
+def test_saliency_uses_dense_grad_not_masked_grad():
+    p = Parameter(np.ones((1, 2)), mask=np.array([[True, False]]))
+    p.grad = np.array([[1.0, 0.0]])
+    p.dense_grad = np.array([[1.0, 5.0]])
+    sal = Saliency(decay=0.0)
+    sal.observe([p])
+    # pruned entry: stored w is 0 so its saliency is 0 regardless; live entry uses dense_grad
+    np.testing.assert_allclose(sal.scores([p])[0], [[1.0, 0.0]])
+
+
+def _dead_input_data(n=800, d=12, n_dead=6, seed=0):
+    """Features [0, n_dead) are always exactly 0 (like MNIST border pixels); the rest carry the label."""
+    r = np.random.default_rng(seed)
+    y = r.integers(0, 3, n)
+    X = r.normal(0, 1, (n, d))
+    X[:, n_dead:] += 2.0 * np.eye(3)[y] @ r.normal(0, 1, (3, d - n_dead))
+    X[:, :n_dead] = 0.0
+    X = (X - X.min()) / (X.max() - X.min())
+    X[:, :n_dead] = 0.0
+    return make_split(X, y, 1.0, n_test=100, n_val=100, seed=0)
+
+
+def test_saliency_prunes_dead_inputs_first_magnitude_does_not():
+    """Weights on an always-zero input get exactly zero gradient, so Adam never moves them: they keep
+    their random init magnitude.  Saliency scores them exactly 0; magnitude keeps the large ones.
+
+    Dead ReLU units (never active) also give their weights exactly zero saliency, which saliency is right
+    about too.  So the budget here = the number of zero-saliency weights; with that budget saliency must remove
+    every dead-input weight, and magnitude (same model, same budget) must keep some of them."""
+    data = _dead_input_data()
+    n_dead = 6
+    m = MLP([12, 16, 3], np.random.default_rng(1))
+    params = m.prunable()
+    sal = Saliency()
+    train(m, data, epochs=3, batch_size=32, lr=1e-2, seed=0, log=None, on_backward=lambda s: sal.observe(params))
+    assert np.all(params[0].dense_grad[:n_dead] == 0)
+    total = sum(p.data.size for p in params)
+    n_zero = sum(int((s == 0).sum()) for s in sal.scores(params))
+    assert n_zero >= n_dead * 16
+    snapshot = [p.data.copy() for p in params]
+    kept_dead = {}
+    for crit in (sal, Magnitude()):
+        for p, w in zip(params, snapshot):
+            p.set_mask(np.ones_like(p.mask))
+            p.data[...] = w
+        mgr = PruneManager(params, crit, final_sparsity=0.5, start_step=0, end_step=1, min_density=0.0)
+        mgr.prune_to(n_zero / total)
+        assert mgr.active() == total - n_zero
+        kept_dead[crit.name] = int(params[0].mask[:n_dead].sum())
+    assert kept_dead["saliency"] == 0, kept_dead
+    assert kept_dead["magnitude"] > 0, kept_dead
+
+
+# ---------------------------------------------------------------- end-to-end hard budget + honest masking
+def _blobs(n=600, d=10, k=3, seed=0):
+    r = np.random.default_rng(seed)
+    y = r.integers(0, k, n)
+    X = r.normal(0, 2.0, (k, d))[y] + r.normal(0, 1.0, (n, d))
+    X = (X - X.min()) / (X.max() - X.min())
+    return make_split(X, y, 1.0, n_test=100, n_val=100, seed=0)
+
+
+def test_manager_hits_budget_exactly_and_masks_are_real_zeros_through_finetune():
+    data = _blobs()
+    m = MLP([10, 64, 32, 3], np.random.default_rng(0))
+    params = m.prunable()
+    total = sum(p.data.size for p in params)
+    opt = Adam(m.parameters(), lr=1e-2)
+    mgr = PruneManager(params, Saliency(), final_sparsity=0.9, start_step=15, end_step=75, every=10, min_density=0.05)
+    seen = []
+
+    def on_step(step):
+        mgr.on_step(step)
+        if step > mgr.end:  # fine-tune phase: budget must hold and pruned weights stay exact zeros
+            seen.append(mgr.active())
+            for i, p in enumerate(params):
+                assert np.all(p.data[~p.mask] == 0.0)
+                j = opt.params.index(p)
+                assert np.all(opt.m[j][~p.mask] == 0) and np.all(opt.v[j][~p.mask] == 0)
+
+    h = train(m, data, epochs=12, batch_size=32, lr=1e-2, seed=0, log=None, opt=opt,
+              on_backward=mgr.on_backward, on_step=on_step)
+    assert mgr.active() == total - round(0.9 * total)
+    assert seen and len(set(seen)) == 1                     # frozen after the ramp
+    ach = [e["achieved"] for e in mgr.events]
+    assert all(b >= a for a, b in zip(ach, ach[1:]))         # monotone
+    assert all(abs(e["achieved"] - e["target"]) <= 1.0 / total + 1e-12 for e in mgr.events)
+    assert all(s <= 0.95 + 1e-12 for s in mgr.layer_sparsity())  # 5% floor respected per layer
+    assert np.isfinite(h["train_loss"]).all()
+    _, acc = evaluate(m, data.x_test, data.y_test)
+    assert acc > 0.85
+
+
+def test_zero_target_is_exactly_dense_training():
+    data = _blobs()
+    runs = []
+    for prune in (False, True):
+        m = MLP([10, 16, 3], np.random.default_rng(3))
+        kw = {}
+        if prune:
+            mgr = PruneManager(m.prunable(), Saliency(), 0.0, 5, 20, every=5)
+            kw = dict(on_backward=mgr.on_backward, on_step=mgr.on_step)
+        runs.append(train(m, data, 3, 32, 1e-2, seed=3, log=None, **kw)["train_loss"])
+    np.testing.assert_array_equal(runs[0], runs[1])
