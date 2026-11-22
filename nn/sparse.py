@@ -90,11 +90,13 @@ class SparseMLP:
                 keep = has_in & has_out
                 Ws[l], masks[l], bs[l] = Ws[l][:, keep], masks[l][:, keep], bs[l][keep]
                 Ws[l + 1], masks[l + 1] = Ws[l + 1][keep], masks[l + 1][keep]
-        self.layers = [CompactLayer(W, m, b, CSR.from_dense(W, m)) for W, m, b in zip(Ws, masks, bs)]
+        # contiguous copies: column slicing leaves strided arrays and BLAS is measurably slower on them
+        self.layers = [CompactLayer(np.ascontiguousarray(W), m, b, CSR.from_dense(W, m)) for W, m, b in zip(Ws, masks, bs)]
+        self.all_inputs = self.in_keep.size == Ws[0].shape[0] if not compact else self.in_keep.size == self.dense_shapes[0][0]
 
     # ----------------------------------------------------------------- forward paths
     def _run(self, x, mm):
-        h = x[:, self.in_keep]
+        h = x if self.all_inputs else x[:, self.in_keep]   # gather only when inputs were actually removed
         for i, L in enumerate(self.layers):
             h = mm(h, L) + L.b
             if i < len(self.layers) - 1:
