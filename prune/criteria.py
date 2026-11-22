@@ -72,4 +72,37 @@ class Saliency:
         return [e / bc for e in self.ema]
 
 
-CRITERIA = {"saliency": Saliency, "magnitude": Magnitude}
+class Fisher:
+    """Second-order term of the same Taylor expansion:  1/2 H_ii w_i^2  with  H_ii ~ F_ii = E[g_i^2].
+
+    Score = w_i^2 * EMA_t(g_i^(t)^2)   (dense_grad again; the 1/2 does not change the ranking).
+    Near convergence E[g] -> 0 kills the first-order term, but E[g^2] stays positive, so this term does not
+    vanish.  Same EMA decay as Saliency so the comparison changes only the score formula.
+    """
+
+    name = "fisher"
+
+    def __init__(self, decay: float = 0.99):
+        if not 0.0 <= decay < 1.0:
+            raise ValueError("decay must be in [0, 1)")
+        self.decay = decay
+        self.ema: list[np.ndarray] | None = None
+        self.n = 0
+
+    def observe(self, params: list[Parameter]) -> None:
+        if self.ema is None:
+            self.ema = [np.zeros(p.data.shape) for p in params]
+        for e, p in zip(self.ema, params):
+            g = p.dense_grad.astype(np.float64)
+            e *= self.decay
+            e += (1.0 - self.decay) * g * g
+        self.n += 1
+
+    def scores(self, params: list[Parameter]) -> list[np.ndarray]:
+        if self.ema is None or self.n == 0:
+            raise RuntimeError("fisher has no observations yet; prune only after a warmup")
+        bc = 1.0 - self.decay ** self.n
+        return [p.data.astype(np.float64) ** 2 * (e / bc) for p, e in zip(params, self.ema)]
+
+
+CRITERIA = {"saliency": Saliency, "magnitude": Magnitude, "fisher": Fisher}

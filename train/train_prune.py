@@ -48,7 +48,7 @@ def main(argv=None):
     ap.add_argument("--warmup-epochs", type=float, default=2)
     ap.add_argument("--ramp-end-epoch", type=float, default=10)
     ap.add_argument("--prune-every", type=int, default=100, help="steps between mask updates during the ramp")
-    ap.add_argument("--ema", type=float, default=0.99, help="saliency EMA decay")
+    ap.add_argument("--ema", type=float, default=0.99, help="EMA decay for saliency / fisher")
     ap.add_argument("--min-density", type=float, default=0.05, help="per-layer floor on kept fraction")
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -64,7 +64,7 @@ def main(argv=None):
     model = MLP(dims, np.random.default_rng(a.seed), dtype=np.float32)
     spe = math.ceil(len(data.x_train) / a.batch_size)
     start, end = int(a.warmup_epochs * spe), int(a.ramp_end_epoch * spe)
-    crit = CRITERIA[a.criterion](a.ema) if a.criterion == "saliency" else CRITERIA[a.criterion]()
+    crit = CRITERIA[a.criterion]() if a.criterion == "magnitude" else CRITERIA[a.criterion](a.ema)
     mgr = PruneManager(model.prunable(), crit, a.target, start, end, a.prune_every, a.min_density)
     n_params = sum(p.data.size for p in model.parameters())
     print(f"{data.name}: dims {dims} | {n_params:,} params ({mgr.total:,} prunable) | target {a.target:.0%} "

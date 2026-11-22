@@ -182,3 +182,15 @@ def test_zero_target_is_exactly_dense_training():
             kw = dict(on_backward=mgr.on_backward, on_step=mgr.on_step)
         runs.append(train(m, data, 3, 32, 1e-2, seed=3, log=None, **kw)["train_loss"])
     np.testing.assert_array_equal(runs[0], runs[1])
+
+
+def test_fisher_is_w_squared_times_ema_of_g_squared_and_survives_cancelling_gradients():
+    from prune import Fisher
+    p = Parameter(np.array([[1.0, -2.0]]))
+    f = Fisher(decay=0.5)
+    for g in ([1.0, 1.0], [-1.0, 3.0]):
+        p.dense_grad = np.array([g])
+        f.observe([p])
+    ema = (0.25 * np.array([1.0, 1.0]) + 0.5 * np.array([1.0, 9.0])) / 0.75
+    np.testing.assert_allclose(f.scores([p])[0], p.data ** 2 * ema)
+    assert f.scores([p])[0][0, 0] > 0           # mean g for w0 is 0, but E[g^2] is not
