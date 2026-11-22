@@ -165,7 +165,7 @@ def test_manager_hits_budget_exactly_and_masks_are_real_zeros_through_finetune()
     ach = [e["achieved"] for e in mgr.events]
     assert all(b >= a for a, b in zip(ach, ach[1:]))         # monotone
     assert all(abs(e["achieved"] - e["target"]) <= 1.0 / total + 1e-12 for e in mgr.events)
-    assert all(s <= 0.95 + 1e-12 for s in mgr.layer_sparsity())  # 5% floor respected per layer
+    assert all(int(p.mask.sum()) >= int(0.05 * p.data.size) for p in params)  # 5% floor (rounded down) per layer
     assert np.isfinite(h["train_loss"]).all()
     _, acc = evaluate(m, data.x_test, data.y_test)
     assert acc > 0.85
@@ -252,6 +252,27 @@ def test_regrowth_end_to_end_keeps_exact_budget_and_floors():
     assert mgr.active() == total - round(0.9 * total)
     assert all(e["sparsity"] >= 0.9 - 1e-12 or e["step"] < mgr.end for e in mgr.regrow_events)
     assert len(mgr.regrow_events) > 5 and mgr.regrowth_stats()["unique_revived"] > 0
-    assert all(s <= 0.95 + 1e-12 for s in mgr.layer_sparsity())
+    assert all(int(p.mask.sum()) >= int(0.05 * p.data.size) for p in params)
     for p in params:
         assert np.all(p.data[~p.mask] == 0.0)
+
+
+def test_floor_never_exceeds_budget_and_does_not_force_uniform_layers_at_high_sparsity():
+    """Regression: at 95% with a 5% floor, ceil-rounded floors summed to budget + 1 (crash), and even exact floors
+    would have forced every layer to exactly 5%.  Floor is now min(min_density, (1-s)/2), rounded down."""
+    from prune import Fisher
+    r = np.random.default_rng(0)
+    ps = [Parameter(r.normal(size=s)) for s in [(784, 256), (256, 128), (128, 10)]]
+    for i, p in enumerate(ps):
+        p.dense_grad = np.full_like(p.data, 10.0 ** -i)      # layers clearly ranked: layer 0 most salient
+    f = Fisher(decay=0.0)
+    f.observe(ps)
+    for s in (0.9, 0.95, 0.98):
+        for p in ps:
+            p.set_mask(np.ones_like(p.mask))
+        mgr = PruneManager(ps, f, s, 0, 10, min_density=0.05)
+        mgr.prune_to(s)
+        assert mgr.active() == mgr.total - round(s * mgr.total)
+        dens = [1 - x for x in mgr.layer_sparsity()]
+        assert all(d >= min(0.05, 0.5 * (1 - s)) - 1e-3 for d in dens)
+        assert max(dens) - min(dens) > 0.01                  # global ranking still decides, not the floor

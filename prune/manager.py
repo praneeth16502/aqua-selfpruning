@@ -131,8 +131,11 @@ class PruneManager:
         return sc
 
     def _min_keep(self, sparsity: float) -> list[int]:
-        floor = min(self.min_density, 1.0 - sparsity)
-        return [min(math.ceil(floor * n), n) for n in self.sizes]
+        # Floor capped at HALF the remaining density: with floor == 1 - s (e.g. 5% at 95%) every layer would be forced
+        # to exactly the same density and the global ranking would silently become uniform per-layer pruning.
+        # Rounded DOWN so the floors can never exceed the budget (ceil overshot it by 1 weight at 95%).
+        floor = min(self.min_density, 0.5 * (1.0 - sparsity))
+        return [min(math.floor(floor * n), n) for n in self.sizes]
 
     def prune_to(self, sparsity: float, step: int = -1) -> None:
         keep_total = self.total - int(round(sparsity * self.total))
