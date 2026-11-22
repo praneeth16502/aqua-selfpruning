@@ -56,3 +56,41 @@ If you mix these up, either Adam keeps nudging dead weights (corrupting momentum
 ### Decision going into Step 3
 - The dense number to beat (or hold) is **97.57% test, final-epoch**. Every pruned run uses the exact same protocol — same 20 epochs, same split seed, final-epoch model — otherwise the comparison is meaningless.
 - If pruned models come out slightly *above* dense at mild sparsity, I'll frame that as "pruning removed the overfitting", not "pruning made the model better". Might also log the dense model at 10 epochs as a second reference so that point is visible rather than argued.
+
+---
+
+## Step 3 — Self-Pruning (in progress)
+
+### Schedule decision (locked before writing code)
+- Didn't want to prune a finished, overfitted model — that's basically one-shot pruning with extra steps, which the brief calls the weaker answer. Also considered starting from the epoch-10 best-val checkpoint and dropped it: that's using val to pick a start point, and it breaks the "final-epoch, no checkpoint picking" rule I already committed to.
+- Went with **15 epochs for every run**: 2 dense warmup → cubic ramp from epoch 2 to 10 → 5 epochs fine-tuning with masks frozen. Masks recomputed every 100 steps (35 prune events).
+- Warmup matters for both criteria: at init `|w·g|` and `|w|` are basically random rankings.
+- Same budget for dense, saliency and magnitude. Re-ran dense under this exact protocol so I'm not comparing a 15-epoch pruned run against a 20-epoch dense one.
+
+### Design choices
+- **Score = EMA of `|w · dense_grad|` per minibatch, not `|w · EMA(g)|`.** The first-order Taylor term is signed, and near convergence the average gradient goes to ~0, so `|w · mean g|` collapses for every weight. Averaging the absolute per-batch product keeps a signal — it's bounded by `sqrt(w² · E[g²])`, i.e. tied to the Fisher approximation of the second-order term. Wrote a test where signed gradients cancel on purpose to pin this down.
+- Uses `dense_grad`, never `grad` — this is exactly what the Step 1 split was for.
+- **Global ranking + 5% per-layer floor.** Saliency is in loss units, so comparing across layers is fair. The floor is there because the logits layer is only 0.5% of the weights and a global cut could empty it. Same allocation for magnitude so the baseline differs in just the score.
+- No regrowth yet — get the basic version right first.
+
+### Things that bit me
+- **Clean-venv crash:** first MNIST run locally died — sklearn's `fetch_openml` silently needs pandas with its default parser. Colab ships pandas, so it never showed up there. A reviewer cloning the repo would have hit this. Switched to `parser="liac-arff"`.
+  - Sanity check that the data is the same: local epoch 1 is `0.2904 / 0.9164` vs Colab `0.2905 / 0.9163`. Same data, last-digit BLAS differences.
+- **My own test was wrong at first.** I expected saliency to remove all weights on always-zero inputs (like MNIST border pixels — they get exactly zero gradient, so Adam never moves them and they keep their random init size, which magnitude can't tell apart from useful weights). It kept 45 of 96. Turned out 5 of 16 hidden units were dead ReLUs, so their weights also scored exactly 0 and ties got broken by index. Saliency wasn't wrong — dead units are useless too. Rewrote the test with a budget equal to the number of zero-score weights: saliency drops every dead-input weight, magnitude keeps some.
+
+### First MNIST numbers (seed 0, single run — NOT a conclusion yet)
+| run | test acc | live weights | layer sparsity (784×256 / 256×128 / 128×10) |
+|---|---|---|---|
+| dense (15 ep) | 97.32% | 234,752 | 0 / 0 / 0 |
+| saliency 90% | 97.97% | 23,475 | 92.8% / 75.6% / 18.0% |
+| magnitude 90% | **98.16%** | 23,475 | 92.6% / 75.7% / 55.0% |
+
+- Hit exactly 90.00% both times, frozen through fine-tune. Budget works.
+- **Magnitude came out ahead of saliency on this seed.** Not what I expected. But 0.19pp is 19 test images, and the binomial SE on a 10k test set at 98% is already ~0.14pp per run — so this is within noise. Can't say anything until I have multiple seeds.
+- Both pruned models beat dense. Dense's final epoch is noisy (val dropped to 96.8% at epoch 15) and it's overfitting; pruning acts as a regularizer. Will frame this as "removes overfitting", not "makes the model better".
+- Interesting difference: saliency left the logits layer almost intact (18% pruned), magnitude cut 55% there. Same totals in the first two layers.
+- **Activation shrink watch item:** hidden-layer E[h²] on val dropped from 0.74 → 0.46 (saliency) / 0.33 (magnitude) in layer 1, and 7.3 → 4.2 in layer 2. So it does shrink, but only ~40–55% despite removing ~93% of layer-1 fan-in — training compensates. Accuracy is fine, so no rescaling for now.
+
+### Next
+- Multiple seeds for dense / saliency / magnitude at 90% before trusting the ranking.
+- Then regrowth, then the Pareto sweep in Step 4.
