@@ -116,3 +116,15 @@ What I think is going on (hypotheses, not tested yet):
 - Allocation differs too: saliency keeps the logits layer 73–82% dense, magnitude only ~42–45%. Small in absolute count (~400 weights), but worth noting.
 
 Decision: magnitude stays the **baseline** and saliency stays **the method** — not swapping labels after seeing results. Next I'll try one principled fix (the second-order/Fisher form `w²·E[g²]`, which is what the derivation actually points to late in training) as a measured comparison, and report whatever comes out. If magnitude still wins, that's the honest result and the writeup explains why.
+
+### Second-order run — set up before seeing results
+- Added `fisher`: score = `w² · EMA(g²)`, i.e. the `½ H_ii w²` term with the empirical Fisher standing in for the Hessian diagonal. When the average gradient is ~0, `E[g²]` still isn't.
+- Same EMA decay (0.99), same 15-epoch protocol, same 90%, same 5 seeds, same split. Only the formula changes. Reusing the magnitude and saliency runs I already have — 5 new runs, not 10.
+- Not going to tune the window after seeing it. One shot, reported either way.
+
+### Regrowth rule — written down before running anything
+Applies to whichever of saliency / fisher ends up as "the method"; compared against the same method without regrowth, 90%, 5 seeds.
+- **Who can come back:** dead weights ranked by EMA of `|dense_grad|`. A revived weight starts at 0, so the first-order loss drop from moving it is proportional to `|g|` — that's the right score for a dead weight (its `|w·g|` is always 0).
+- **When / how many:** at each epoch boundary after warmup, revive `k = max(10% of weights pruned during that epoch, 0.5% of live weights)`, and prune the `k` lowest-scoring live weights at the same time — so sparsity stays exactly on schedule (a swap, not extra capacity).
+- **Revived at 0 with fresh Adam state** (already how `set_mask` + Adam work).
+- **Grace period: revived weights can't be pruned for one epoch.** Caught this while writing the rule — a revived weight is at 0, so its saliency/fisher score is 0 and the very next prune event would kill it again. Without the grace period regrowth would silently do nothing.
