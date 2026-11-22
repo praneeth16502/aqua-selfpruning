@@ -7,9 +7,11 @@ numbers are in `results/`. If you want the story of how I got here, including th
 test set touched once. At 90% sparsity over 5 seeds: magnitude 98.13 ± 0.05%, Fisher 97.97 ± 0.13%, first-order
 saliency 97.85 ± 0.10%, dense 97.81 ± 0.12%. Magnitude beats first-order saliency on every seed (paired −0.28 points,
 t = −6.64). Fisher lands in between and isn't significantly different from either. Accuracy stays flat all the way to
-95% for both Fisher and magnitude. On cost it flips: only Fisher's pruned model actually runs faster (1.50× at 90%,
+95% for both Fisher and magnitude. On cost it flips: only Fisher's pruned model actually runs faster (1.53× at 90%,
 2.43× at 95%, batch 1000, identical predictions), because it removes whole input pixels and hidden units. Magnitude's
-doesn't (0.74×).
+doesn't (0.92× to 1.00×).
+
+![Accuracy vs measured speedup](results/summary.png)
 
 ---
 
@@ -62,6 +64,10 @@ weight matters equally per unit of size. It never looks at the data.
 | fisher `w²·EMA(g²)` | 97.97 ± 0.13 | ~0.006–0.008 |
 | magnitude `|w|` | **98.13 ± 0.05** | ~0.0055 |
 
+![Schedule, validation accuracy and training loss during pruning](results/part3/pruning_dynamics.png)
+
+![Every seed at 90% sparsity](results/part3/criteria_90.png)
+
 - **On MNIST, the criteria I derived lose to magnitude.** Saliency minus magnitude is −0.28 points, negative on all 5
   seeds, t = −6.64 (4 degrees of freedom, 5% critical value 2.78). Fisher minus magnitude is −0.16 points,
   t = −2.51: not significant, but behind or tied on all 5 seeds. Fisher minus saliency is +0.12 points, t = 2.36, also
@@ -80,6 +86,8 @@ weight matters equally per unit of size. It never looks at the data.
   keep their random starting size. At 90%, Fisher drops 350 of the 784 inputs completely, and magnitude drops 22.
   That's what makes Fisher's model cheaper to run (§3.2). There's a unit test for the same effect: on always-zero
   inputs, saliency removes every such weight and magnitude keeps some.
+
+  ![Live first-layer weights per input pixel](results/part4/input_pixels.png)
 - **Disclosure.** I made Fisher "the method" *after* seeing the 90% comparison. My reasons were that it's the term
   the derivation points to late in training, and it was never clearly worse than first order. Magnitude was the
   baseline from start to finish, and I didn't swap the labels. But it does mean the Fisher results in the Pareto sweep
@@ -219,7 +227,7 @@ What I'd do about it, in order:
 4. **Only compute `dense_grad` when something needs it**: on scoring steps, and not at all during fine-tuning without
    regrowth. The rest of the time, backward only writes `grad`.
 5. Cache `w_eff` between mask changes instead of recomputing `where` on every forward.
-6. **For inference in NumPy, run the compacted dense model, not CSR.** From §3.2: compaction is 1.50× faster than
+6. **For inference in NumPy, run the compacted dense model, not CSR.** From §3.2: compaction is 1.53× faster than
    dense at 90% (Fisher), while CSR is about 30× slower despite doing 10× fewer multiply-adds. CSR only pays off with a
    compiled sparse kernel, or with structured (block or 2:4) sparsity that the hardware supports.
 
@@ -236,20 +244,34 @@ identical predictions (`results/part4/cost.json`):
 
 | model (batch 1000) | multiply-adds per image: dense / compact / csr | compact vs dense | csr vs dense |
 |---|---|---|---|
-| fisher 90% | 234,752 / 114,940 / 23,475 | **1.50×** | 0.03× |
-| fisher 95% | 234,752 / 70,662 / 11,738 | **2.43×** | 0.07× |
-| magnitude 90% | 234,752 / 228,854 / 23,452 | 0.74× | 0.03× |
+| fisher 50% | 234,752 / 176,620 / 117,376 | 1.14× | 0.004× |
+| fisher 75% | 234,752 / 151,036 / 58,688 | 1.34× | 0.011× |
+| fisher 90% | 234,752 / 114,940 / 23,475 | **1.53×** | 0.033× |
+| fisher 95% | 234,752 / 70,662 / 11,738 | **2.43×** | 0.071× |
+| magnitude 50% | 234,752 / 234,752 / 117,376 | 1.00× | 0.004× |
+| magnitude 75% | 234,752 / 234,752 / 58,688 | 1.00× | 0.012× |
+| magnitude 90% | 234,752 / 228,854 / 23,452 | 0.92× | 0.030× |
+| magnitude 95% | 234,752 / 209,850 / 11,717 | 0.99× | 0.064× |
+
+![Measured speedup of compacted and CSR paths](results/part4/cost.png)
 
 - **In NumPy, unstructured sparsity doesn't save any time.** CSR does 10× fewer multiply-adds at 90% and is still
   about 30× slower than dense at batch 1000 (and slower at batch 1 too). The gather builds an `(N × nnz)` array, and
   BLAS is far better at dense matrix multiplies than NumPy is at gather-and-sum. The reduction in arithmetic is real;
   the speedup just isn't there on this stack.
-- **What pays off is removing structure.** After compaction, Fisher's 90% model is 434-203-126-10: 1.50× faster, same
-  predictions. Magnitude's is 762-256-127-10: barely smaller, and copying the kept inputs makes it slower.
-- My first version of this benchmark had two bugs, and the 0% row caught both. At 0% sparsity, dense and compact are
-  the same network, so they have to come out at 1.00×. The first bug: the dense path re-applied the mask on every
-  call, which made dense look 5× slower than it is. The second: the compacted matrices weren't contiguous after column
-  slicing. I fixed both.
+- **What pays off is removing structure.** After compaction, Fisher's 90% model is 434-203-126-10: 1.53× faster, same
+  predictions. Magnitude's is 762-256-127-10: barely smaller, and copying the kept inputs makes it slightly slower
+  (0.92×). At 50% and 75% magnitude removes no input or unit at all, so compaction does nothing (1.00×).
+- **How it's timed.** Dense and compact are measured round-robin (each repeat times both back to back, median of
+  15), after a 3-second CPU warm-up; CSR is timed separately. The ratios matter more than the absolute times, which
+  drifted by up to ±20% on identical work while I was measuring.
+- My first versions of this benchmark had four bugs, and the 0% row (dense and compact are the same network there,
+  so they must time at 1.00×) caught every one. At 0% sparsity, dense and compact are
+  the same network, so they have to come out at 1.00×. (1) The dense path re-applied the mask on every call, which made dense look 5×
+  slower than it is. (2) The compacted matrices weren't contiguous after column slicing. (3) Timing each path in its own
+  block let machine drift land on one path and not another (0% row read 1.13×). (4) After switching to round-robin, CSR
+  sat in the same rotation, and its ~1 GB temporary evicted the caches right before dense ran (0% row read 1.20×).
+  With all four fixed the 0% row reads 0.99–1.04× and magnitude 50/75% (nothing removable) read exactly 1.00×.
 
 ---
 
@@ -284,8 +306,8 @@ or block), so the accuracy-vs-cost trade-off is measured on the thing that actua
 
 **Throughput and latency.**
 - Dynamic batching with a short maximum wait (a few milliseconds) per structure group. At batch 1000, the compacted
-  Fisher 90% model ran in 3.6 ms single-threaded against 5.5 ms for dense, so the speedup holds up under batching. At
-  batch 1 it's 0.026 ms against 0.036 ms, where per-request overhead dominates anyway.
+  Fisher 90% model ran in 3.3 ms single-threaded against 5.0 ms for dense, so the speedup holds up under batching. At
+  batch 1 it's 0.023 ms against 0.033 ms, where per-request overhead dominates anyway.
 - Pin BLAS threads per worker and scale out with processes. It's the same lesson as my reproducibility bug:
   oversubscribed BLAS threads change both the latency and the numbers.
 - A p99 latency target per tenant, with load shedding, and a fallback to a cheaper or cached path when queues grow.

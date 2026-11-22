@@ -67,8 +67,13 @@ python -m train.sweep --targets 0 0.9 --criteria saliency fisher magnitude --see
 inference paths single-threaded at batch sizes 1, 32 and 1000, and checks they all give the same predictions.
 ```bash
 python -m train.sweep --targets 0 0.5 0.75 0.9 0.95 --criteria fisher --seeds 0 --out results/part4 --save-model --jobs 5
-python -m train.sweep --targets 0.9 --criteria magnitude --seeds 0 --out results/part4 --save-model --jobs 1
+python -m train.sweep --targets 0.5 0.75 0.9 0.95 --criteria magnitude --seeds 0 --out results/part4 --save-model --jobs 4
 python -m train.bench_cost --models results/part4/models/*.npz       # -> results/part4/cost.json
+```
+
+All the figures are drawn from the committed result files, with no training:
+```bash
+python -m train.figures
 ```
 
 A note on reproducibility: every `python -m train.*` command pins BLAS to one thread. I found out the hard way that
@@ -77,6 +82,12 @@ a different model (DESIGN.md, appendix C). With the pin, runs reproduce bit for 
 is float32; gradient checks run in float64.
 
 ## Results
+
+![Accuracy vs measured speedup for every sparsity level](results/summary.png)
+
+Every point is a pruned model, accuracy averaged over seeds 0-2, speed measured on the compacted model. Accuracy
+barely moves at any sparsity. Only Fisher's models get faster, because Fisher removes whole input pixels and hidden
+units; the labels show the network size after compaction.
 
 At 90% sparsity, 5 seeds each:
 
@@ -91,23 +102,39 @@ You'll see three different dense numbers in this repo, and they don't disagree. 
 seed 0 only). 97.81 ± 0.12% is the dense reference under the 15-epoch pruning schedule over seeds 0-4, as in the table.
 97.77 ± 0.14% is the same 15-epoch run over seeds 0-2 only, so the Pareto curve uses the same seeds at every point.
 
+![Every seed at 90% sparsity, per criterion](results/part3/criteria_90.png)
+
 **The falsifiable claim.** At 90% sparsity on MNIST (784-256-128-10, the schedule above), magnitude pruning keeps
 98.13 ± 0.05% test accuracy against 97.85 ± 0.10% for first-order saliency, over 5 seeds. Paired by seed, the
 difference is −0.28 points, negative on all 5 seeds, t = −6.64 (4 degrees of freedom). Fisher vs magnitude is −0.16
 points, t = −2.51, which isn't significant. So on accuracy, my importance-based criteria do **not** beat magnitude
 here. DESIGN.md §1.2 goes into why.
 
+![Sparsity vs accuracy, Fisher and magnitude](results/part4/pareto.png)
+
+The Pareto curve is flat: even at 95% sparsity both methods are at or above dense. This network is much bigger than
+MNIST needs, so the curve never reaches the point where accuracy falls off.
+
 **Where Fisher does win is cost.** The only pruning that turned into real wall-clock speedup was the kind that removes
-whole rows and columns. Fisher's 90% model shrinks to 434-203-126-10 and runs 1.50× faster than dense at batch 1000
+whole rows and columns. Fisher's 90% model shrinks to 434-203-126-10 and runs 1.53× faster than dense at batch 1000
 (2.43× at 95%), with identical predictions. Magnitude's 90% model only shrinks to 762-256-127-10 and isn't any faster
-(0.74×). My CSR kernel does 10× fewer multiply-adds at 90% but is slower than dense BLAS at every batch size. In
+(0.92×). My CSR kernel does 10× fewer multiply-adds at 90% but is slower than dense BLAS at every batch size. In
 NumPy, unstructured sparsity just isn't a speedup.
+
+![Measured speedup of the compacted and CSR paths](results/part4/cost.png)
+
+Why Fisher's models shrink and magnitude's don't is easiest to see in the input layer. Pixels that almost never have
+ink give almost no gradient, so Fisher scores every weight on them as worthless and the pixel disappears. Magnitude
+can't see that, so it keeps them at their random starting size:
+
+![Live first-layer weights per input pixel, Fisher vs magnitude](results/part4/input_pixels.png)
 
 ## Status
 - [x] Step 1: autodiff engine, broadcast-correct backward, fused softmax + cross-entropy, mask-aware `Parameter` and
       Adam, tests.
 - [x] Step 2: MLP (784-256-128-10, ReLU, He/LeCun init), Adam, training loop, learning curve. Dense MNIST, seed 0,
-      20 epochs: **97.87% test accuracy, test loss 0.100** (final-epoch model; `results/part2_mnist_seed0.json`).
+      20 epochs: **97.87% test accuracy, test loss 0.100** (final-epoch model; `results/part2_mnist_seed0.json`,
+      curve in `results/part2_mnist_seed0_curve.png`).
       It overfits: validation loss bottoms at 0.085 around epoch 7 and climbs to 0.146 by epoch 20 while training loss
       drops to 0.004. (My earlier Colab run of the same command gave 97.57%; different BLAS, see notes.md.)
 - [x] Step 3: saliency, Fisher and magnitude criteria; cubic ramp; global ranking with a per-layer floor; exact hard
