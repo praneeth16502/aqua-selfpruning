@@ -50,6 +50,22 @@ def _expand_reduced(g, in_shape: tuple, axis, keepdims: bool) -> np.ndarray:
     return np.broadcast_to(g, in_shape)
 
 
+_GRAD_ENABLED = True
+
+
+class no_grad:
+    """Context manager: ops inside build no graph (evaluation / inference). Re-entrant and exception-safe."""
+
+    def __enter__(self):
+        global _GRAD_ENABLED
+        self._prev, _GRAD_ENABLED = _GRAD_ENABLED, False
+
+    def __exit__(self, *exc):
+        global _GRAD_ENABLED
+        _GRAD_ENABLED = self._prev
+        return False
+
+
 def _as_tensor(x) -> "Tensor":
     return x if isinstance(x, Tensor) else Tensor(x)
 
@@ -71,7 +87,7 @@ class Tensor:
     # ------------------------------------------------------------------ graph
     @staticmethod
     def _make(data, parents, op: str, backward) -> "Tensor":
-        needs = any(p.requires_grad for p in parents)
+        needs = _GRAD_ENABLED and any(p.requires_grad for p in parents)
         out = Tensor(data, requires_grad=needs)
         if needs:  # don't build graph for constants-only subexpressions
             out._parents, out._backward, out._op = tuple(parents), backward, op

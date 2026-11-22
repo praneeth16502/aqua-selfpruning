@@ -80,3 +80,22 @@ def test_backward_nonscalar_requires_explicit_grad():
         raise AssertionError("expected ValueError")
     (x * 2.0).backward(np.array([1.0, 10.0]))
     np.testing.assert_array_equal(x.grad, [2.0, 20.0])
+
+
+def test_no_grad_builds_no_graph_and_restores_state_even_on_exception():
+    from engine import Parameter, no_grad
+    p = Parameter(np.ones((2, 2)))
+    x = Tensor(np.ones((1, 2)))
+    with no_grad():
+        out = x @ p.masked()
+        assert out._parents == () and not out.requires_grad
+        with no_grad():  # re-entrant
+            pass
+        assert (x @ p.masked())._parents == ()
+    assert (x @ p.masked()).requires_grad  # restored
+    try:
+        with no_grad():
+            raise RuntimeError
+    except RuntimeError:
+        pass
+    assert (x @ p.masked()).requires_grad  # restored after exception too
