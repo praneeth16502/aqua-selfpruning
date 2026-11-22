@@ -94,3 +94,25 @@ If you mix these up, either Adam keeps nudging dead weights (corrupting momentum
 ### Next
 - Multiple seeds for dense / saliency / magnitude at 90% before trusting the ranking.
 - Then regrowth, then the Pareto sweep in Step 4.
+
+### 5 seeds at 90% — magnitude wins, and it's not noise
+Ran seeds 1–4 for all three (12 runs, 3 in parallel, ~2 min each). Same 15-epoch protocol, final-epoch model.
+
+| run | test acc (mean ± std, n=5) | min – max |
+|---|---|---|
+| dense | 97.61 ± 0.17 | 97.32 – 97.77 |
+| saliency 90% | 97.83 ± 0.19 | 97.52 – 97.97 |
+| magnitude 90% | **98.17 ± 0.07** | 98.09 – 98.26 |
+
+- Compared them **paired by seed** — same seed means same init and same batch order through warmup, so the pairing cancels out what both runs share. Saliency − magnitude per seed: −0.19, −0.59, −0.47, −0.13, −0.30 pp. Mean **−0.34 pp**, t = −3.91 with 4 df (5% critical value 2.78). Magnitude is better on 5/5 seeds. That's a real difference, not seed noise.
+- Seed 0 was actually the *closest* seed. Glad I didn't stop at one run.
+- Both pruned models still beat dense (97.61), so the "pruning removes overfitting" point holds across seeds.
+- Magnitude is also the most stable (std 0.07 vs 0.19).
+
+What I think is going on (hypotheses, not tested yet):
+- Saliency doesn't just generalize worse — it **fits the training set worse** too: final train loss ~0.010 for saliency vs ~0.0055 for magnitude on every seed. So it's removing weights the training loss actually needed. That's the opposite of what a loss-based criterion is supposed to do.
+- By the second half of the ramp training loss is ~0.02, so per-batch gradients are small and mostly noise from a few hard examples. A 100-step EMA of `|w·g|` is probably ranking by that noise.
+- Magnitude under Adam has long memory for free: a weight gets big because its gradient pointed the same way for thousands of steps. That's basically an integrated movement signal, and my saliency window is only ~100 steps.
+- Allocation differs too: saliency keeps the logits layer 73–82% dense, magnitude only ~42–45%. Small in absolute count (~400 weights), but worth noting.
+
+Decision: magnitude stays the **baseline** and saliency stays **the method** — not swapping labels after seeing results. Next I'll try one principled fix (the second-order/Fisher form `w²·E[g²]`, which is what the derivation actually points to late in training) as a measured comparison, and report whatever comes out. If magnitude still wins, that's the honest result and the writeup explains why.
