@@ -33,7 +33,10 @@ Training uses float32; gradient checks run in float64 (see DESIGN.md section 5).
 
 ## Status
 - [x] Step 1: autodiff engine, broadcast-correct backward, fused softmax-CE, mask-aware `Parameter` + Adam, tests
-- [~] Step 2: MLP (784-256-128-10, ReLU/He), Adam, loop, curve — code + tests done; **dense MNIST baseline number pending a networked run**
+- [x] Step 2: MLP (784-256-128-10, ReLU/He), Adam, loop, curve — dense MNIST seed 0, 20 epochs:
+      **test acc 97.57%, test loss 0.121** (final-epoch model, no checkpoint picking; `results/part2_mnist_seed0.json`).
+      Val acc peaks at 97.86% (epoch 10); val loss bottoms at 0.0875 (epoch 10) and rises to 0.141 by epoch 20
+      while train loss falls to 0.007 — the dense model overfits after ~epoch 10.
 - [ ] Step 3: saliency pruning + cubic ramp + regrowth
 - [ ] Step 4: Pareto sweep, sparse-aware cost measurement, seeds, falsifiable claim
 
