@@ -29,7 +29,7 @@ def main(argv=None):
     ap.add_argument("--criteria", nargs="+", default=["saliency", "magnitude"])
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4])
     ap.add_argument("--jobs", type=int, default=3)
-    ap.add_argument("--threads", type=int, default=2, help="BLAS threads per job")
+    ap.add_argument("--threads", type=int, default=1, help="BLAS threads per job (keep 1: the committed numbers were made single-threaded and thread count changes results)")
     ap.add_argument("--out", default="results/part3")
     ap.add_argument("--regrow", action="store_true")
     ap.add_argument("--plots", action="store_true", help="also write a curve PNG per run")
