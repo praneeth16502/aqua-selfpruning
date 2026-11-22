@@ -1,0 +1,58 @@
+# Engineering Notes — Self-Pruning Network
+
+Running log of decisions, bugs caught, and observations as I build this out.
+
+---
+
+## Step 1 — Autodiff Engine & Masked-Weight Correctness
+
+### Core mental model
+The whole point of Part 1 isn't just getting a toy autograd working—it's making sure the graph and optimizer don't silently break when weights get zeroed out (masked) mid-training.
+
+The split that made everything click:
+- `grad = mask ⊙ ∂L/∂w_eff` → what the optimizer sees. Strictly 0 for pruned weights.
+- `dense_grad = ∂L/∂w_eff` → pre-mask gradient kept separately for saliency and regrowth. Never passed to Adam.
+
+If you mix these up, either Adam keeps nudging dead weights (corrupting momentum) or dead weights look permanently dead to any regrowth logic.
+
+### Bugs / subtleties I caught
+- **`np.where(mask, w, 0)` instead of `w * mask`:** In IEEE 754, `nan * 0 = nan` and `inf * 0 = nan`. If a pruned slot ever holds garbage, multiplying by 0 poisons the forward pass. `np.where` avoids this completely.
+- **Mask snapshot on forward:** Snapshotting the mask inside `masked()` prevents an in-flight backward pass from seeing a different mask if `set_mask()` is called between forward and backward.
+- **Adam revival state:** Dropping state (`m = v = t = 0`) on mask change and tracking a *per-element* step count `t` keeps the first post-revival step bounded at `≈ lr * sign(g)`.
+  - Verified against two failure modes: stale moments actually push a revived weight *uphill* (`-5.6e-3` vs `+1.0e-2`), and a global step count `t` with zeroed moments causes a revival spike that grows with training time (measured `0.74×` at `t=56`, `2.5×` at `t=1000`, `3.16×` at `t>=10^4`). Had to fix my own docstring because I initially claimed `~3.2×` everywhere.
+- **XOR-invisible round trips:** If a weight is pruned and revived between two optimizer steps, comparing `old_mask != new_mask` misses it. Added change tracking in `Parameter` (`consume_mask_changes`) so Adam still resets state.
+- **Mutation-testing my own tests:** Everything passed on the first run (38/38 grad-checks, 62/62 suite, 12/12 masked), which is suspicious. Planted intentional bugs to check test coverage:
+  - Removing Adam's post-step re-zero guard didn't fail `d1` because `0 / (0 + eps) = 0` anyway. Added `test_d9` to explicitly corrupt a pruned slot.
+  - First broadcast mutation only broke the `(N, D)` side; redid it on the `(D,)` bias side and 11 tests went red.
+
+---
+
+## Step 2 — MLP, Initialization, and Dense MNIST Baseline
+
+### Architecture & Init decisions
+- **784 → 256 → 128 → 10 (ReLU):** Needs enough redundancy to survive 90–95% sparsity in Part 3; something tiny like `784-64-10` would collapse.
+- **He init** (`Var(w) = 2/n_in`) for hidden ReLU layers, **LeCun init** (`1/n_in`) for the final logits layer since there's no ReLU after it. Verified empirically in `init_study.py` over an 8-layer network—He keeps `E[h²]` flat around `~0.3` while gain=1 decays by ~100×.
+- **Watch item for Step 3:** He init preserves variance at step 0, but once 90% of fan-in is pruned, activation variance will shrink. Need to keep an eye on whether training recovers naturally or if rescaling matters.
+
+### Performance & dtype findings
+- Switched training to `float32` while keeping `float64` for finite-difference grad-checks (validated float32 vs float64 gradients agree within `1e-4` rel L2).
+- Profiling surprise: `float64` wasn't the main slowdown—Adam was taking 6ms out of 10ms/step due to hidden `float64` upcasting and per-step integer array `pow()`. Replacing that with running `β^t` products and native param dtype cut Adam down to 2.5ms.
+
+### Dense MNIST Baseline (Colab run)
+- `pytest -q`: **91 passed in 1.64s**.
+- `train_dense` (20 epochs, batch 128, lr 1e-3, seed 0):
+  - **Final test accuracy: 97.57%** (test loss `0.1212`, final-epoch model, no checkpoint picking).
+  - **Val accuracy** peaked at **97.86%** around epoch 10 (val loss `0.0875`), then val loss drifted up to `0.1407` while train acc hit `99.77%`.
+- **Takeaway:** Classic dense-MLP overfitting after epoch 10. That's actually a good sign for Step 3—there's plenty of spare capacity in these 235k parameters, so gradual pruning should act as a regularizer and hold close to ~97% even at high sparsity.
+- Epoch times bounced between ~5s and ~10s on Colab with no pattern in the loss — that's shared-VM noise, not the code. Not using Colab wall-clock for anything in Part 4; cost numbers get measured locally on one fixed setup.
+
+### Moving off Colab to a local repo
+- Pulled the project out of the zip into `~/Projects/aqua-selfpruning` so I have one real git repo instead of notebook cells. The `%%writefile` workflow was fine for getting started but impossible to commit cleanly.
+- Mac's system Python is 3.9.6 and `pyproject.toml` says `>=3.10`, so the stock interpreter was out. Used `uv` to pull CPython 3.12 into `.venv` (already gitignored).
+- Re-ran the suite locally: **91 passed in 6.92s** — same count as Colab, so nothing in the tests depends on the environment. Slower wall time than Colab but this machine is the one I'll use for everything from here on, which is what matters for consistent timing.
+- Rewrote the author on the first 18 commits from the placeholder to my noreply address, kept the original dates. Didn't squash — the brief explicitly asks for real history.
+- Committed the baseline JSON + learning curve with the numbers in the commit message, then pushed to a private GitHub repo. Will flip it public / add reviewers at submission.
+
+### Decision going into Step 3
+- The dense number to beat (or hold) is **97.57% test, final-epoch**. Every pruned run uses the exact same protocol — same 20 epochs, same split seed, final-epoch model — otherwise the comparison is meaningless.
+- If pruned models come out slightly *above* dense at mild sparsity, I'll frame that as "pruning removed the overfitting", not "pruning made the model better". Might also log the dense model at 10 epochs as a second reference so that point is visible rather than argued.
