@@ -49,6 +49,7 @@ def main(argv=None):
     ap.add_argument("--ramp-end-epoch", type=float, default=10)
     ap.add_argument("--prune-every", type=int, default=100, help="steps between mask updates during the ramp")
     ap.add_argument("--ema", type=float, default=0.99, help="EMA decay for saliency / fisher")
+    ap.add_argument("--regrow", action="store_true", help="enable regrowth swaps (rule in prune/manager.py)")
     ap.add_argument("--min-density", type=float, default=0.05, help="per-layer floor on kept fraction")
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -65,7 +66,8 @@ def main(argv=None):
     spe = math.ceil(len(data.x_train) / a.batch_size)
     start, end = int(a.warmup_epochs * spe), int(a.ramp_end_epoch * spe)
     crit = CRITERIA[a.criterion]() if a.criterion == "magnitude" else CRITERIA[a.criterion](a.ema)
-    mgr = PruneManager(model.prunable(), crit, a.target, start, end, a.prune_every, a.min_density)
+    mgr = PruneManager(model.prunable(), crit, a.target, start, end, a.prune_every, a.min_density,
+                       regrow=a.regrow, regrow_every=spe)
     n_params = sum(p.data.size for p in model.parameters())
     print(f"{data.name}: dims {dims} | {n_params:,} params ({mgr.total:,} prunable) | target {a.target:.0%} "
           f"{a.criterion} | prune steps {start}..{end} every {a.prune_every} ({spe} steps/epoch)")
@@ -79,17 +81,20 @@ def main(argv=None):
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    name = "dense" if a.target == 0 else f"{a.criterion}_s{round(a.target * 100)}"
+    name = "dense" if a.target == 0 else f"{a.criterion}{'-regrow' if a.regrow else ''}_s{round(a.target * 100)}"
     tag = f"{name}_seed{a.seed}"
     rec = {"config": vars(a), "dims": dims, "steps_per_epoch": spe, "prune_start_step": start, "prune_end_step": end,
            "history": hist, "test_loss": test_loss, "test_acc": test_acc,
            "sparsity": mgr.sparsity(), "active_weights": mgr.active(), "prunable_weights": mgr.total,
            "layer_sparsity": layer_sp, "hidden_E_h2_val": hidden_second_moments(model, data.x_val),
-           "events": mgr.events}
+           "events": mgr.events, "regrowth": mgr.regrowth_stats() if mgr.regrow else None,
+           "regrow_events": mgr.regrow_events}
     (out / f"{tag}.json").write_text(json.dumps(rec, indent=2))
     if not a.no_plot:
         plot_prune_curve(hist, str(out / f"{tag}_curve.png"), f"{name} {dims} seed {a.seed} | test {test_acc:.2%}",
                          a.warmup_epochs, a.ramp_end_epoch)
+    if mgr.regrow:
+        print(f"regrowth: {mgr.regrowth_stats()}")
     print(f"wrote {out}/{tag}.json")
     return rec
 

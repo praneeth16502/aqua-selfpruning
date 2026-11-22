@@ -17,8 +17,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
-def run_name(target: float, criterion: str, seed: int) -> str:
-    return f"dense_seed{seed}" if target == 0 else f"{criterion}_s{round(target * 100)}_seed{seed}"
+def run_name(target: float, criterion: str, seed: int, regrow: bool = False) -> str:
+    if target == 0:
+        return f"dense_seed{seed}"
+    return f"{criterion}{'-regrow' if regrow else ''}_s{round(target * 100)}_seed{seed}"
 
 
 def main(argv=None):
@@ -29,6 +31,7 @@ def main(argv=None):
     ap.add_argument("--jobs", type=int, default=3)
     ap.add_argument("--threads", type=int, default=2, help="BLAS threads per job")
     ap.add_argument("--out", default="results/part3")
+    ap.add_argument("--regrow", action="store_true")
     ap.add_argument("--plots", action="store_true", help="also write a curve PNG per run")
     a, extra = ap.parse_known_args(argv)  # anything else is forwarded to train_prune
 
@@ -36,9 +39,10 @@ def main(argv=None):
     for seed in a.seeds:
         for t in a.targets:
             for c in (["saliency"] if t == 0 else a.criteria):
-                name = run_name(t, c, seed)
+                name = run_name(t, c, seed, a.regrow and t > 0)
                 if not (Path(a.out) / f"{name}.json").exists():
-                    runs.append((name, ["--target", str(t), "--criterion", c, "--seed", str(seed), "--out", a.out]))
+                    args = ["--target", str(t), "--criterion", c, "--seed", str(seed), "--out", a.out]
+                    runs.append((name, args + (["--regrow"] if a.regrow and t > 0 else [])))
     print(f"{len(runs)} runs to do ({a.jobs} parallel x {a.threads} threads)")
     Path("logs").mkdir(exist_ok=True)
     env = {**os.environ, "OMP_NUM_THREADS": str(a.threads), "OPENBLAS_NUM_THREADS": str(a.threads),

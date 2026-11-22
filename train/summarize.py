@@ -31,7 +31,7 @@ def mean_std(xs):
 def load(d: Path):
     runs = defaultdict(dict)  # (criterion, target) -> {seed: record}
     for f in sorted(d.glob("*_seed*.json")):
-        m = re.match(r"(dense|saliency|magnitude|fisher)(?:_s(\d+))?_seed(\d+)\.json", f.name)
+        m = re.match(r"(dense|saliency|magnitude|fisher-regrow|fisher)(?:_s(\d+))?_seed(\d+)\.json", f.name)
         if not m:
             continue
         r = json.loads(f.read_text())
@@ -58,8 +58,8 @@ def main(argv=None):
                               "mean": m, "std": s})
     targets = sorted({t for (c, t) in runs if c != "dense"})
     for t in targets:
-        for meth in ("saliency", "fisher"):
-            a_runs, mag = runs.get((meth, t), {}), runs.get(("magnitude", t), {})
+        for meth, base in (("saliency", "magnitude"), ("fisher", "magnitude"), ("fisher-regrow", "fisher")):
+            a_runs, mag = runs.get((meth, t), {}), runs.get((base, t), {})
             seeds = sorted(set(a_runs) & set(mag))
             if len(seeds) < 2:
                 continue
@@ -68,9 +68,9 @@ def main(argv=None):
             tstat = m / (s / math.sqrt(len(diffs))) if s > 0 else float("inf")
             crit = T_CRIT_05.get(len(diffs) - 1)
             verdict = "significant at 5%" if crit and abs(tstat) > crit else "NOT significant at 5% (within noise)"
-            print(f"\npaired {meth} - magnitude @ {t}%  n={len(seeds)}  per-seed {[round(100*x, 2) for x in diffs]}")
+            print(f"\npaired {meth} - {base} @ {t}%  n={len(seeds)}  per-seed {[round(100*x, 2) for x in diffs]}")
             print(f"  mean {100*m:+.2f} pp  std {100*s:.2f} pp  t={tstat:+.2f}  (|t| crit {crit})  -> {verdict}")
-            out["paired"].append({"method": meth, "baseline": "magnitude", "target_pct": t, "seeds": seeds,
+            out["paired"].append({"method": meth, "baseline": base, "target_pct": t, "seeds": seeds,
                                   "diff_method_minus_baseline": diffs, "mean": m, "std": s, "t": tstat,
                                   "t_crit_05": crit, "significant_05": bool(crit and abs(tstat) > crit)})
     (d / "summary.json").write_text(json.dumps(out, indent=2))
