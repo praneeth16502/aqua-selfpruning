@@ -154,3 +154,18 @@ What I take from it:
   1. At 90%, magnitude 98.17 ± 0.07% vs saliency 97.83 ± 0.19%, paired −0.34 pp, t = −3.91, n = 5 (significant).
   2. Fisher 97.97 ± 0.13%: vs magnitude −0.20 pp, t = −2.67 (not significant, behind on 5/5); vs saliency +0.14 pp, t = 2.79 (borderline — consistent with the derivation, not a strong win).
 - Regrowth gets tested on Fisher only, Fisher+regrowth vs Fisher, 90%, 5 seeds.
+
+### Regrowth result (Fisher + regrowth vs Fisher, 90%, 5 seeds) — no effect
+Ran exactly the rule committed beforehand, no changes.
+
+| run | test acc (mean ± std, n=5) | min – max |
+|---|---|---|
+| fisher | 97.97 ± 0.13 | 97.82 – 98.13 |
+| fisher + regrowth | 98.00 ± 0.23 | 97.78 – 98.38 |
+
+- Paired per seed: +0.25, +0.05, −0.11, −0.11, +0.09 → mean **+0.03 pp**, t = 0.50. Nothing there. Regrowth didn't help or hurt; it just made results noisier (std 0.23 vs 0.13).
+- The interesting part is *why*: across 13 swaps it revived ~21.8k weights (~18.2k unique) — almost as many as the 23,475 that end up live. Only **~480 of them (~2% of the final network) were still alive at the end**. So ~97% of revived weights got pruned again as soon as their one-epoch grace ran out.
+- My read: there's an asymmetry in the rule. A dead weight gets back in on `|g|` (big gradient = "I'd help"), but once it's live it's judged on `w² · E[g²]`, and after one epoch starting from 0 its `w` is still small compared to weights that have been growing for 10 epochs. So it loses. Regrowth with this scoring mostly churns.
+- Things that might fix it (NOT doing them now — that would be tuning after the fact): longer grace, revive at a non-zero value, or judge revived weights relative to their own cohort.
+- Takeaway for the writeup: regrowth works mechanically (exact budget, real zeros, fresh Adam state, grace period tested), and I can explain the stability side, but with this rule on MNIST at 90% it buys nothing. Counts as an honest ablation, not a win.
+- Side note: dense + regrowth runs are ~25% slower per epoch — the extra `|dense_grad|` EMA every step and the observe calls continuing through fine-tune.
