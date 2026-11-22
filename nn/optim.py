@@ -35,32 +35,45 @@ class Adam:
         self.m = [np.zeros_like(p.data) for p in self.params]
         self.v = [np.zeros_like(p.data) for p in self.params]
         self.t = [np.zeros(p.data.shape, dtype=np.int64) for p in self.params]
+        # beta^t per element, maintained by running product (a pow over a big int array each step was
+        # the single largest cost in the training step).  float64 so 1-beta2^t is exact for small t.
+        self.b1p = [np.ones(p.data.shape) for p in self.params]
+        self.b2p = [np.ones(p.data.shape) for p in self.params]
 
     def zero_grad(self) -> None:
         for p in self.params:
             p.zero_grad()
 
+    def _clear(self, i: int, where) -> None:
+        self.m[i][where] = 0.0
+        self.v[i][where] = 0.0
+        self.t[i][where] = 0
+        self.b1p[i][where] = 1.0
+        self.b2p[i][where] = 1.0
+
     def step(self) -> None:
-        for p, m, v, t in zip(self.params, self.m, self.v, self.t):
+        for i, p in enumerate(self.params):
+            m, v, t, b1p, b2p = self.m[i], self.v[i], self.t[i], self.b1p[i], self.b2p[i]
             mask = getattr(p, "mask", None)
             if self.reset:
                 ch = p.consume_mask_changes() if hasattr(p, "consume_mask_changes") else None
                 if ch is not None:  # prune->revive between two steps still gets a clean slate
-                    m[ch] = 0.0
-                    v[ch] = 0.0
-                    t[ch] = 0
+                    self._clear(i, ch)
             g = p.grad
+            dt = p.data.dtype
             m *= self.b1
             m += (1 - self.b1) * g
             v *= self.b2
-            v += (1 - self.b2) * g * g
+            v += ((1 - self.b2) * g) * g
             t += 1
-            m_hat = m / (1 - self.b1 ** t)
-            v_hat = v / (1 - self.b2 ** t)
-            p.data -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+            b1p *= self.b1
+            b2p *= self.b2
+            inv_bc1 = (1.0 / (1.0 - b1p)).astype(dt)  # bias correction in float64, applied in param dtype
+            inv_bc2 = (1.0 / (1.0 - b2p)).astype(dt)
+            denom = np.sqrt(v * inv_bc2)
+            denom += self.eps
+            p.data -= (self.lr * m * inv_bc1) / denom
             if mask is not None:
                 p.data[~mask] = 0.0  # invariant: pruned weights are exactly 0 after every step
                 if self.reset:
-                    m[~mask] = 0.0
-                    v[~mask] = 0.0
-                    t[~mask] = 0
+                    self._clear(i, ~mask)
