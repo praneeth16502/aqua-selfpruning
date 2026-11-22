@@ -1,0 +1,388 @@
+{
+  "meta": {
+    "machine": "macOS-15.1.1-x86_64-i386-64bit",
+    "processor": "i386",
+    "numpy": "2.5.5",
+    "note": "single process; BLAS threads as set by the environment (OMP_NUM_THREADS etc.)"
+  },
+  "models": [
+    {
+      "model": "dense_seed0.npz",
+      "sparsity": 0.0,
+      "test_acc": {
+        "dense": 0.9764,
+        "compact": 0.9764,
+        "csr": 0.9764
+      },
+      "predictions_identical": true,
+      "dense_shapes": [
+        [
+          784,
+          256
+        ],
+        [
+          256,
+          128
+        ],
+        [
+          128,
+          10
+        ]
+      ],
+      "compact_shapes": [
+        [
+          784,
+          256
+        ],
+        [
+          256,
+          128
+        ],
+        [
+          128,
+          10
+        ]
+      ],
+      "inputs_read": 784,
+      "dense_params": 235146,
+      "active_params": 235146,
+      "macs_per_sample": {
+        "dense": 234752,
+        "compact_dense": 234752,
+        "csr": 234752
+      },
+      "seconds_per_batch": {
+        "1": {
+          "dense": 3.77535791074024e-05,
+          "compact": 3.5385788081043756e-05,
+          "csr": 0.0006092761093441368
+        },
+        "32": {
+          "dense": 0.00023645391399895743,
+          "compact": 0.0002359119140464827,
+          "csr": 0.0710121130105108
+        },
+        "1000": {
+          "dense": 0.005603036497632274,
+          "compact": 0.0055944816249393625,
+          "csr": 3.8967484970053192
+        }
+      }
+    },
+    {
+      "model": "fisher_s50_seed0.npz",
+      "sparsity": 0.5,
+      "test_acc": {
+        "dense": 0.9789,
+        "compact": 0.9789,
+        "csr": 0.9789
+      },
+      "predictions_identical": true,
+      "dense_shapes": [
+        [
+          784,
+          256
+        ],
+        [
+          256,
+          128
+        ],
+        [
+          128,
+          10
+        ]
+      ],
+      "compact_shapes": [
+        [
+          559,
+          256
+        ],
+        [
+          256,
+          126
+        ],
+        [
+          126,
+          10
+        ]
+      ],
+      "inputs_read": 559,
+      "dense_params": 235146,
+      "active_params": 117768,
+      "macs_per_sample": {
+        "dense": 234752,
+        "compact_dense": 176620,
+        "csr": 117376
+      },
+      "seconds_per_batch": {
+        "1": {
+          "dense": 3.467339941209957e-05,
+          "compact": 3.3420935537264995e-05,
+          "csr": 0.0003503334766037369
+        },
+        "32": {
+          "dense": 0.0002470143906521116,
+          "compact": 0.0002035568046494518,
+          "csr": 0.020288747997255996
+        },
+        "1000": {
+          "dense": 0.005595858625383698,
+          "compact": 0.005531014876396512,
+          "csr": 1.1303879449988017
+        }
+      }
+    },
+    {
+      "model": "fisher_s75_seed0.npz",
+      "sparsity": 0.75,
+      "test_acc": {
+        "dense": 0.9797,
+        "compact": 0.9797,
+        "csr": 0.9797
+      },
+      "predictions_identical": true,
+      "dense_shapes": [
+        [
+          784,
+          256
+        ],
+        [
+          256,
+          128
+        ],
+        [
+          128,
+          10
+        ]
+      ],
+      "compact_shapes": [
+        [
+          466,
+          253
+        ],
+        [
+          253,
+          126
+        ],
+        [
+          126,
+          10
+        ]
+      ],
+      "inputs_read": 466,
+      "dense_params": 235146,
+      "active_params": 59077,
+      "macs_per_sample": {
+        "dense": 234752,
+        "compact_dense": 151036,
+        "csr": 58688
+      },
+      "seconds_per_batch": {
+        "1": {
+          "dense": 3.580498045607783e-05,
+          "compact": 2.794562988128746e-05,
+          "csr": 0.00021271990624427417
+        },
+        "32": {
+          "dense": 0.00023407368757943914,
+          "compact": 0.0001757584648203192,
+          "csr": 0.00715628137368185
+        },
+        "1000": {
+          "dense": 0.00558205175002513,
+          "compact": 0.004496522124100011,
+          "csr": 0.507162943991716
+        }
+      }
+    },
+    {
+      "model": "fisher_s90_seed0.npz",
+      "sparsity": 0.9000008519629226,
+      "test_acc": {
+        "dense": 0.9813,
+        "compact": 0.9813,
+        "csr": 0.9813
+      },
+      "predictions_identical": true,
+      "dense_shapes": [
+        [
+          784,
+          256
+        ],
+        [
+          256,
+          128
+        ],
+        [
+          128,
+          10
+        ]
+      ],
+      "compact_shapes": [
+        [
+          434,
+          203
+        ],
+        [
+          203,
+          126
+        ],
+        [
+          126,
+          10
+        ]
+      ],
+      "inputs_read": 434,
+      "dense_params": 235146,
+      "active_params": 23814,
+      "macs_per_sample": {
+        "dense": 234752,
+        "compact_dense": 114940,
+        "csr": 23475
+      },
+      "seconds_per_batch": {
+        "1": {
+          "dense": 3.6203003915602494e-05,
+          "compact": 2.578684814125154e-05,
+          "csr": 0.00012744604686076855
+        },
+        "32": {
+          "dense": 0.00023601246880389226,
+          "compact": 0.00016379689844825407,
+          "csr": 0.002338395999686327
+        },
+        "1000": {
+          "dense": 0.005466324124427047,
+          "compact": 0.0036395073748280993,
+          "csr": 0.1622354189894395
+        }
+      }
+    },
+    {
+      "model": "fisher_s95_seed0.npz",
+      "sparsity": 0.9499982960741549,
+      "test_acc": {
+        "dense": 0.9785,
+        "compact": 0.9785,
+        "csr": 0.9785
+      },
+      "predictions_identical": true,
+      "dense_shapes": [
+        [
+          784,
+          256
+        ],
+        [
+          256,
+          128
+        ],
+        [
+          128,
+          10
+        ]
+      ],
+      "compact_shapes": [
+        [
+          403,
+          132
+        ],
+        [
+          132,
+          123
+        ],
+        [
+          123,
+          10
+        ]
+      ],
+      "inputs_read": 403,
+      "dense_params": 235146,
+      "active_params": 12003,
+      "macs_per_sample": {
+        "dense": 234752,
+        "compact_dense": 70662,
+        "csr": 11738
+      },
+      "seconds_per_batch": {
+        "1": {
+          "dense": 3.6583060548878166e-05,
+          "compact": 2.2063593256405056e-05,
+          "csr": 9.41716308773266e-05
+        },
+        "32": {
+          "dense": 0.0002394777891367994,
+          "compact": 0.00010576666210226904,
+          "csr": 0.0010304956872460025
+        },
+        "1000": {
+          "dense": 0.005530173375518643,
+          "compact": 0.0022802373750892,
+          "csr": 0.07772725399991032
+        }
+      }
+    },
+    {
+      "model": "magnitude_s90_seed0.npz",
+      "sparsity": 0.9000008519629226,
+      "test_acc": {
+        "dense": 0.9815,
+        "compact": 0.9815,
+        "csr": 0.9815
+      },
+      "predictions_identical": true,
+      "dense_shapes": [
+        [
+          784,
+          256
+        ],
+        [
+          256,
+          128
+        ],
+        [
+          128,
+          10
+        ]
+      ],
+      "compact_shapes": [
+        [
+          762,
+          256
+        ],
+        [
+          256,
+          127
+        ],
+        [
+          127,
+          10
+        ]
+      ],
+      "inputs_read": 762,
+      "dense_params": 235146,
+      "active_params": 23845,
+      "macs_per_sample": {
+        "dense": 234752,
+        "compact_dense": 228854,
+        "csr": 23452
+      },
+      "seconds_per_batch": {
+        "1": {
+          "dense": 3.674565820688258e-05,
+          "compact": 4.0971890626906315e-05,
+          "csr": 0.00012820332028695702
+        },
+        "32": {
+          "dense": 0.00023770328130012786,
+          "compact": 0.0002560288124868748,
+          "csr": 0.002301985937265272
+        },
+        "1000": {
+          "dense": 0.005599224625257193,
+          "compact": 0.00761496150153107,
+          "csr": 0.1742359300114913
+        }
+      }
+    }
+  ]
+}
