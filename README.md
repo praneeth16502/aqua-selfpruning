@@ -28,7 +28,14 @@ python -m tests.run                                  # stdlib-only fallback runn
 python -m train.train_dense --dataset mnist --epochs 20 --seed 0   # Part 2: dense baseline + learning curve
                                                                     # (first run downloads MNIST via sklearn, caches data/mnist_784.npz)
 python -m train.init_study                                          # init justification numbers -> results/init_study.json
+
+python -m train.train_prune --target 0.9 --criterion saliency --seed 0    # Part 3: self-pruning run (90% of weights removed)
+python -m train.train_prune --target 0.9 --criterion magnitude --seed 0   # same protocol, magnitude baseline
+python -m train.train_prune --target 0 --seed 0                           # same protocol, no pruning (dense reference)
 ```
+Part 3 protocol (identical for all three): 15 epochs; epochs 0-2 dense warmup, 2-10 cubic sparsity ramp with masks
+recomputed every 100 steps, 10-15 fine-tune with masks frozen at exactly the target; final-epoch model, test touched once.
+Outputs go to `results/part3/`.
 Training uses float32; gradient checks run in float64 (see DESIGN.md section 5).
 
 ## Status
