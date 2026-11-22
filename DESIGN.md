@@ -37,5 +37,11 @@ count** (`t=1` ⇒ first update ≈ `lr·sign(g)`). Revived weights re-enter at 
 * Implementation mutations (8+ variants incl. `w*mask`, optimizer fed `dense_grad`, no moment reset, no
   unbroadcast on either operand, overwrite-vs-accumulate) each turn ≥1 test red.
 
+## 4. Known limits (deliberate, tested or enforced)
+* `matmul` and `transpose` are **2-D only**; other ranks raise `ValueError` (no batched matmul needed for an MLP).
+* **ReLU subgradient at exactly 0 is 0.** Finite differences are invalid at the kink, so grad-check inputs are
+  kept >= 0.1 away from 0 (`away_from_zero` in `tests/test_gradcheck.py`).
+* Grad-check is float64-only (tolerance 1e-6 is meaningless in float32); see Step 2 for how float32 is handled.
+
 ## Pending (later steps)
 Importance criterion derivation · schedule · regrowth stability · autodiff bottlenecks · serving.
