@@ -1,4 +1,7 @@
-numpy>=1.26
-pytest>=8.0
-matplotlib>=3.8          # plots only (Part 4)
-scikit-learn>=1.4        # ONLY to download/load MNIST. Never for models, training or gradients.
+# Exact versions the committed results were produced with (Python 3.12, macOS / Apple Accelerate BLAS).
+# A different numpy or BLAS can change float summation order and shift results in the last digits.
+# requirements-lock.txt pins every transitive package too.
+numpy==2.5.5
+pytest==9.2.0
+matplotlib==3.11.2       # plots only
+scikit-learn==1.9.1      # ONLY to download/load MNIST. Never for models, training or gradients.

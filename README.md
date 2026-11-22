@@ -56,7 +56,7 @@ scikit-learn is used **only** to download and load MNIST (`train/data.py`). Ever
 optimizer, masking, pruning, training loop) is my own code; no PyTorch, TensorFlow, JAX or other NN library.
 
 ```bash
-uv venv --python 3.12 && uv pip install -r requirements.txt          # or pip install -r requirements.txt (Python >= 3.10)
+uv venv --python 3.12 && uv pip install -r requirements.txt          # Python 3.12+, exact pins (full env: requirements-lock.txt)
 python -m pytest -q                                                   # all tests
 python -m pytest -q tests/test_gradcheck.py tests/test_masked.py      # Part 1: gradient checks + masked-weight test
 python -m train.train_dense --dataset mnist --epochs 20 --seed 0      # Part 2: dense training + learning curve
