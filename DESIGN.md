@@ -105,9 +105,17 @@ lowest-scoring live ones, so sparsity stays on schedule.
   in the current descent direction, with no spike that depends on when the weight was revived.
 * **Grace period, one epoch.** Without it, a revived weight scores 0 at the next prune event and is removed straight
   away; regrowth would silently do nothing. Tested both ways.
-* **Result: no effect.** Fisher + regrowth vs Fisher, 90%, n = 5: +0.03 pp, t = 0.50, and noisier (std 0.23 vs
-  0.13). About 21.8k revivals over 13 swaps, but only ~480 revived weights (2% of the final network) survive to the
-  end. The rule is asymmetric: weights get back in on `|g|` and are then judged on `w²E[g²]` against weights that have
+* **Result: no effect.** Same 90% target, same seeds, same protocol; only `--regrow` differs
+  (`results/part3/fisher{,-regrow}_s90_seed*.json`, paired test in `results/part3/summary.json`):
+
+  | seed | 0 | 1 | 2 | 3 | 4 | mean ± std |
+  |---|---|---|---|---|---|---|
+  | fisher | 98.13 | 97.82 | 97.89 | 98.08 | 97.92 | 97.97 ± 0.13 |
+  | fisher + regrowth | 98.38 | 97.87 | 97.78 | 97.97 | 98.01 | 98.00 ± 0.23 |
+  | difference (pp) | +0.25 | +0.05 | −0.11 | −0.11 | +0.09 | **+0.03 ± 0.15, t = 0.50** |
+
+  Not significant (critical value 2.78), positive on 3 of 5 seeds, and noisier. Mechanism, from the run logs: about
+  21.8k revivals over 13 swaps, but only ~480 revived weights (2% of the final network) survive to the end. The rule is asymmetric: weights get back in on `|g|` and are then judged on `w²E[g²]` against weights that have
   been growing for 10 epochs. With this rule it mostly churns. Candidate fixes (not run, to avoid tuning on the
   outcome): longer grace, non-zero revival value, judging revived weights within their own cohort.
 
@@ -167,11 +175,17 @@ Policy: **drop.** While masked, `m = v = t = 0`. Revival restarts from zero stat
 | the 9 GEMMs this step needs, nothing else | 1.62 | |
 
 The matrix multiplies are ~15% of the step. The rest is overhead:
-* **Adam is the single biggest cost, and it's memory traffic.** In isolation it takes 2.4 ms; inside the training
-  loop 5.1 ms. The arithmetic is trivial, but per element it reads/writes `data, grad, m, v, t (int64),
-  β1^t, β2^t (float64)` plus temporaries. The per-element step count that makes revival correct (§2.1) costs
-  ~24 extra bytes per parameter per step. Likely cause of the in-loop slowdown: those arrays competing for cache with
-  activations and gradients (hypothesis, not measured with hardware counters).
+* **Adam is the single biggest cost.** Measured: 5.1 ms per step inside the training loop, 2.4 ms when the same
+  `step()` runs on its own; the mask re-zero/state-clear bookkeeping is 0.09 ms (negligible).
+  *Known, measured cost:* the per-element bias correction that makes revival correct (§2.1). Every step, for every
+  parameter, it updates two full-size float64 arrays `β1^t, β2^t` (running products; the original `β**t` power over an
+  int array was already removed in Step 2), computes `1/(1−β1^t)` and `1/(1−β2^t)` as full arrays and casts them to
+  float32. Timed alone that is **0.9 ms of Adam's ~2.4 ms**, more than the moment updates (0.36 ms) and the final
+  update (0.25 ms) together. With a global `t` it would be two scalars.
+  *Hypothesis, not measured:* the extra 2.7 ms inside the loop is memory traffic. Per element Adam reads/writes
+  `data, grad, m, v, t (int64), β1^t, β2^t (float64)` plus temporaries, ~24 bytes more than textbook Adam, and inside
+  the loop those arrays compete for cache with activations and gradients. I haven't confirmed this with hardware
+  counters.
 * **Python-level graph overhead.** Every op allocates a `Tensor`, a closure and output arrays; `backward` walks a
   Python topological order. Fine for an MLP with ~10 nodes, dominant for deep or wide graphs of small ops.
 * **NumPy temporaries.** Each elementwise expression allocates a new array (`m*b1 + (1-b1)*g` is three). Backward
@@ -180,9 +194,11 @@ The matrix multiplies are ~15% of the step. The rest is overhead:
   full-size gradient accumulated every step even though it's only needed while scoring.
 
 Optimisations, in the order I'd do them:
-1. **Fuse Adam into one pass per parameter** (compiled kernel), keep `β^t` in float32, and keep per-element `t` only
-   for recently revived entries (a sparse side-table) with one global `t` for the rest. That keeps the revival
-   guarantee and drops most of the extra traffic.
+1. **Make bias correction cheap.** Keep one global `t` (two scalars) for weights that were never revived, and a sparse
+   side-table of per-element `t` only for recently revived entries; after ~1/(1−β2) ≈ 1000 steps a revived entry's
+   correction is ≈1 and it can rejoin the global path. Same revival guarantee, and the 0.9 ms full-array work drops
+   to roughly the size of the revived set. Then fuse the remaining elementwise Adam ops into one pass per parameter
+   (a compiled kernel; in NumPy, at least `out=` buffers so no temporaries).
 2. **Preallocate and update in place.** Gradient buffers, Adam temporaries and the masked-weight buffer reused across
    steps (`np.multiply(..., out=)`), so no per-step allocation.
 3. **Fuse `linear + bias + relu`** forward and backward into one op: one node instead of three, one temporary
@@ -190,6 +206,9 @@ Optimisations, in the order I'd do them:
 4. **Only compute `dense_grad` when it's needed** (on scoring steps, and not at all in fine-tune without
    regrowth); otherwise backward writes `grad` only.
 5. Cache `w_eff` between mask changes instead of recomputing `where` every forward.
+6. **Inference in NumPy: run the compacted dense model, not CSR.** Measured in §3.2: compaction is 1.50× faster than
+   dense at 90% (Fisher), CSR is ~30× slower despite 10× fewer multiply-adds. CSR only pays with a compiled sparse
+   kernel, or with structured (block / 2:4) sparsity the hardware supports.
 
 ### 3.2 Inference: sparse is not automatically fast (measured, Part 4)
 Three paths on each saved model, single thread, MNIST test set, identical predictions checked per model

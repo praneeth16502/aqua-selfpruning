@@ -69,6 +69,10 @@ Training uses float32; gradient checks run in float64.
 | fisher `w²·EMA(g²)` (the method) | 97.97 ± 0.13% | 23,475 |
 | magnitude `|w|` (baseline) | **98.13 ± 0.05%** | 23,475 |
 
+**Three dense numbers, three different things, not a disagreement.** 97.87% is the Part 2 run: 20 epochs, seed 0 only.
+97.81 ± 0.12% is the dense reference under the 15-epoch pruning protocol, seeds 0-4 (the table above). 97.77 ± 0.14% is
+the same 15-epoch dense run averaged over seeds 0-2 only, so the Pareto curve uses the same seeds at every point.
+
 **Falsifiable claim.** At 90% sparsity on MNIST (784-256-128-10, this protocol), magnitude pruning retains
 98.13 ± 0.05% test accuracy vs 97.85 ± 0.10% for first-order saliency, averaged over 5 seeds; paired difference
 −0.28 pp, negative on 5/5 seeds, t = −6.64 (4 df). Fisher vs magnitude: −0.16 pp, t = −2.51 (not significant).
