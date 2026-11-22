@@ -168,4 +168,22 @@ Ran exactly the rule committed beforehand, no changes.
 - My read: there's an asymmetry in the rule. A dead weight gets back in on `|g|` (big gradient = "I'd help"), but once it's live it's judged on `w² · E[g²]`, and after one epoch starting from 0 its `w` is still small compared to weights that have been growing for 10 epochs. So it loses. Regrowth with this scoring mostly churns.
 - Things that might fix it (NOT doing them now — that would be tuning after the fact): longer grace, revive at a non-zero value, or judge revived weights relative to their own cohort.
 - Takeaway for the writeup: regrowth works mechanically (exact budget, real zeros, fresh Adam state, grace period tested), and I can explain the stability side, but with this rule on MNIST at 90% it buys nothing. Counts as an honest ablation, not a win.
-- Side note: dense + regrowth runs are ~25% slower per epoch — the extra `|dense_grad|` EMA every step and the observe calls continuing through fine-tune.
+- Side note: regrowth runs took ~30% longer (217s vs 168s, both 5-in-parallel) — the extra `|dense_grad|` EMA every step, and scoring continues through fine-tune.
+
+---
+
+## Step 4 — Pareto, cost, reproducibility (in progress)
+
+### 95% crashed — floor bug
+- All six 95% runs died at the end of the ramp. The 5% per-layer floor was ceil-rounded: 10,036 + 1,639 + 64 = 11,739 weights required vs a budget of 11,738. Off by one.
+- Worse, even with correct rounding, a 5% floor at 95% sparsity forces *every* layer to exactly 5% — the global ranking would quietly turn into uniform per-layer pruning. The crash was actually doing me a favour.
+- Fix: floor = `min(5%, (1 − s)/2)`, rounded down. At ≤90% every layer on MNIST is ≥7% dense so the floor never binds — earlier results unaffected (verified below).
+
+### Reproducibility scare — BLAS threads, not code
+- After the fix I re-ran Fisher 90% seed 0 to confirm nothing moved: got **98.08%**, committed number was **98.13%**. Panicked a bit.
+- Ran the *pre-fix* code on the same seed: also 98.08%. So it wasn't the fix.
+- Difference was the environment: numpy here uses **Apple Accelerate**, which listens to `VECLIB_MAXIMUM_THREADS` and ignores `OMP_NUM_THREADS`. My sweep pinned all four thread vars to 1; my quick recheck only set OMP. Different thread count → different float summation order in matmul → after ~6000 steps, a different model.
+- With threads pinned: two fresh runs both gave exactly 98.13%, bit for bit. So training is deterministic for a fixed thread count, and current code reproduces the committed number.
+- Fix: `train/__init__.py` pins all BLAS thread vars to 1 before numpy loads, so every `python -m train.*` command is reproducible by default.
+- My first batch of runs (dense / saliency / magnitude at 90%, seeds 0–4) used other thread settings, so I'm re-running those 15 under the pinned setting. Expect small changes in individual numbers; the conclusions should hold since the shifts (~0.05pp) are well inside seed spread. Will update the tables with whatever comes out.
+- Honest limit: bit-for-bit only on the same BLAS build. A reviewer on Linux/OpenBLAS may see last-digit differences.
