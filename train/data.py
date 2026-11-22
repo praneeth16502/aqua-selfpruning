@@ -37,7 +37,9 @@ def load_mnist(cache_dir: str | Path = "data"):
         return z["X"], z["y"]
     from sklearn.datasets import fetch_openml  # loading only
 
-    X, y = fetch_openml("mnist_784", version=1, as_frame=False, return_X_y=True)
+    # parser="liac-arff": the default ("auto") silently requires pandas for dense data. Colab ships pandas, a clean
+    # clone with requirements.txt does not -> first run crashed with ImportError.  liac-arff needs nothing extra.
+    X, y = fetch_openml("mnist_784", version=1, as_frame=False, return_X_y=True, parser="liac-arff")
     X, y = X.astype(np.uint8), y.astype(np.uint8)
     cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(cache, X=X, y=y)
