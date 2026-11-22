@@ -187,3 +187,54 @@ Ran exactly the rule committed beforehand, no changes.
 - Fix: `train/__init__.py` pins all BLAS thread vars to 1 before numpy loads, so every `python -m train.*` command is reproducible by default.
 - My first batch of runs (dense / saliency / magnitude at 90%, seeds 0–4) used other thread settings, so I'm re-running those 15 under the pinned setting. Expect small changes in individual numbers; the conclusions should hold since the shifts (~0.05pp) are well inside seed spread. Will update the tables with whatever comes out.
 - Honest limit: bit-for-bit only on the same BLAS build. A reviewer on Linux/OpenBLAS may see last-digit differences.
+
+### Re-run results (pinned threads) — what changed
+The 15 re-runs moved individual numbers by up to ~0.4pp (dense seed 0 went 97.32 → 97.64). Updated 90% table, n=5:
+
+| run | test acc (mean ± std) | min – max |
+|---|---|---|
+| dense | 97.81 ± 0.12 | 97.64 – 97.92 |
+| saliency | 97.85 ± 0.10 | 97.68 – 97.94 |
+| fisher | 97.97 ± 0.13 | 97.82 – 98.13 |
+| magnitude | **98.13 ± 0.05** | 98.08 – 98.21 |
+
+Paired by seed:
+- saliency − magnitude: **−0.28 pp, t = −6.64** — main claim got *stronger*, still 5/5 seeds.
+- fisher − magnitude: −0.16 pp, t = −2.51 — not significant, behind or tied on 5/5.
+- fisher − saliency: +0.12 pp, t = 2.36 — **no longer significant** (was borderline 2.79 before). So I can't claim Fisher beats first-order anymore; it's "never clearly worse, slightly better on average".
+- vs dense: magnitude +0.32 (t = 6.28, real), fisher +0.16 (t = 1.65, no), saliency +0.04 (t = 0.71, no).
+- So my earlier "pruning beats dense across the board" was partly an artefact of an unlucky dense seed 0 under multithreading. Corrected claim: **at 90% nothing is lost vs dense for any criterion, and magnitude is actually better than dense.** Good lesson in why I re-ran instead of patching one number.
+
+### Pareto (3 seeds per point, same seeds everywhere)
+| target | fisher | magnitude |
+|---|---|---|
+| 0% (dense) | 97.77 ± 0.14 | 97.77 ± 0.14 |
+| 50% | 97.79 ± 0.09 | 97.85 ± 0.43 |
+| 75% | 97.98 ± 0.02 | 98.14 ± 0.17 |
+| 90% | 97.95 ± 0.16 | 98.15 ± 0.07 |
+| 95% | 97.83 ± 0.08 | 98.05 ± 0.03 |
+
+- Flat. At 95% both are still at or above dense. This net is far bigger than MNIST needs, so the curve never shows the cliff. Should be upfront that this Pareto curve can't show where accuracy breaks.
+- Magnitude ≥ Fisher at every sparsity, by 0.06–0.22pp. Only 3 seeds per point, so individual points aren't significant; the consistent direction is the signal.
+
+### Cost — the part where Fisher actually wins
+Benchmark: single thread, MNIST test set, median of 7 timing blocks. Every path gives **identical predictions and test accuracy** to the dense masked model (checked per model).
+
+First run was wrong: the dense baseline called `np.where(mask, W, 0)` every forward, so even the *unpruned* model showed "compact" as 5x faster. The 0% row caught it — dense and compact are the same network there, so anything but 1.00x is a benchmark bug. Fixed, then also found compacted matrices weren't contiguous (column slicing) which made BLAS slower. After both fixes the 0% row is 1.00x at every batch size.
+
+Multiply-adds per image and wall-clock speedup vs dense (batch 1000):
+
+| model | inputs read | compacted shapes | MACs: dense / compact / csr | compact speedup | csr speedup |
+|---|---|---|---|---|---|
+| dense | 784 | 784-256-128-10 | 234,752 / 234,752 / 234,752 | 1.00x | 0.00x |
+| fisher 50% | 559 | 559-256-126-10 | 234,752 / 176,620 / 117,376 | 1.01x | 0.00x |
+| fisher 75% | 466 | 466-253-126-10 | 234,752 / 151,036 / 58,688 | 1.24x | 0.01x |
+| fisher 90% | 434 | 434-203-126-10 | 234,752 / 114,940 / 23,475 | **1.50x** | 0.03x |
+| fisher 95% | 403 | 403-132-123-10 | 234,752 / 70,662 / 11,738 | **2.43x** | 0.07x |
+| magnitude 90% | 762 | 762-256-127-10 | 234,752 / 228,854 / 23,452 | **0.74x** | 0.03x |
+
+What this says:
+- **Unstructured sparsity in NumPy doesn't buy wall-clock time.** My CSR kernel does 10x fewer multiply-adds at 90% but is 30x *slower* than dense at batch 1000 — the gather materialises an (N × nnz) array and BLAS is just much better at dense matmul. Even at batch 1 it's slower (0.13 ms vs 0.036 ms). The MAC count is a real reduction in arithmetic, but not a speedup on this hardware/library. Not going to dress that up.
+- **The real speedup comes from structure, and only Fisher produces it.** Fisher drops 350 of 784 input pixels and ~50 hidden units at 90%, so the compacted dense network is genuinely smaller: 1.50x faster at 90%, 2.43x at 95%, same predictions. Magnitude at the same 90% only frees 22 pixels and 1 unit — compaction gives nothing, and the input gather makes it *slower* (0.74x).
+- Why: pixels that are almost always 0 (borders) give near-zero gradients → Fisher scores every weight on them ~0 → whole rows go. Magnitude can't see this; those weights keep their random init size. Same mechanism as the dead-input test in Step 3, now showing up as real cost.
+- **So the honest trade-off at 90%: magnitude is 0.16pp more accurate; Fisher is 1.5x faster in actual wall-clock and 2x fewer MACs on a plain dense path.** That's a more interesting result than "my method wins" would have been.
