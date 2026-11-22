@@ -23,13 +23,15 @@ def evaluate(model, x, y, batch_size: int = 1000) -> tuple[float, float]:
 
 
 def train(model, data: Split, epochs: int, batch_size: int = 128, lr: float = 1e-3, seed: int = 0,
-          log: Callable[[str], None] | None = print, on_backward=None, on_step=None, opt: Adam | None = None):
+          log: Callable[[str], None] | None = print, on_backward=None, on_step=None, opt: Adam | None = None,
+          epoch_metrics: Callable[[], dict] | None = None):
     """Returns a history dict of per-epoch lists.
 
     train_loss/train_acc are running means over the epoch's minibatches (weights change during the epoch,
     so they are slightly pessimistic vs. an end-of-epoch pass); val_* are exact end-of-epoch evaluations.
     A non-finite loss raises immediately: a silent NaN is worse than a crash.
     `on_backward(step)` / `on_step(step)` are extension points (Step 3 hooks pruning here).
+    `epoch_metrics()` returns extra per-epoch scalars (e.g. sparsity) appended to the history and the log line.
     """
     rng = np.random.default_rng(seed)
     opt = opt or Adam(model.parameters(), lr=lr)
@@ -63,7 +65,11 @@ def train(model, data: Split, epochs: int, batch_size: int = 128, lr: float = 1e
             raise FloatingPointError(f"non-finite validation loss at epoch {epoch}")
         for k, v in zip(hist, (epoch, sl / n, sc / n, vl, va, sg / nb, time.perf_counter() - t0)):
             hist[k].append(v)
+        extra = epoch_metrics() if epoch_metrics else {}
+        for k, v in extra.items():
+            hist.setdefault(k, []).append(v)
         if log:
+            tail = "".join(f" | {k} {v:.4f}" for k, v in extra.items())
             log(f"epoch {epoch:3d}  train loss {sl/n:.4f} acc {sc/n:.4f} | val loss {vl:.4f} acc {va:.4f} | "
-                f"|g| {sg/nb:.3f} | {hist['seconds'][-1]:.1f}s")
+                f"|g| {sg/nb:.3f} | {hist['seconds'][-1]:.1f}s{tail}")
     return hist
