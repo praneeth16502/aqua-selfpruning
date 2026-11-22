@@ -58,6 +58,7 @@ def main(argv=None):
     ap.add_argument("--cache-dir", default="data")
     ap.add_argument("--out", default="results/part3")
     ap.add_argument("--no-plot", action="store_true")
+    ap.add_argument("--save-model", action="store_true", help="also save W, b, mask per layer to <out>/models/<tag>.npz")
     a = ap.parse_args(argv)
 
     data = get_dataset(a.dataset, seed=a.split_seed, dtype=np.float32, cache_dir=a.cache_dir)
@@ -95,6 +96,12 @@ def main(argv=None):
                          a.warmup_epochs, a.ramp_end_epoch)
     if mgr.regrow:
         print(f"regrowth: {mgr.regrowth_stats()}")
+    if a.save_model:
+        (out / "models").mkdir(exist_ok=True)
+        arrs = {}
+        for i, l in enumerate(model.linears()):
+            arrs[f"W{i}"], arrs[f"b{i}"], arrs[f"mask{i}"] = np.where(l.W.mask, l.W.data, 0), l.b.data, l.W.mask
+        np.savez_compressed(out / "models" / f"{tag}.npz", **arrs)
     print(f"wrote {out}/{tag}.json")
     return rec
 
