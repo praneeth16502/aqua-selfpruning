@@ -31,11 +31,12 @@ def load_model(path: Path):
     return [z[f"W{i}"] for i in range(n)], [z[f"mask{i}"] for i in range(n)], [z[f"b{i}"] for i in range(n)]
 
 
-def dense_forward(x, Ws, masks, bs):
+def dense_forward(x, Weffs, bs):
+    """Plain dense forward on pre-masked weights: the dense-times-zeros shortcut, nothing else."""
     h = x
-    for i, (W, m, b) in enumerate(zip(Ws, masks, bs)):
-        h = h @ np.where(m, W, 0) + b
-        if i < len(Ws) - 1:
+    for i, (W, b) in enumerate(zip(Weffs, bs)):
+        h = h @ W + b
+        if i < len(Weffs) - 1:
             h = np.maximum(h, 0)
     return h
 
@@ -75,10 +76,10 @@ def main(argv=None):
     for path in sorted(map(Path, a.models)):
         Ws, masks, bs = load_model(path)
         s = SparseMLP(Ws, masks, bs)
-        # Pre-mask once for the dense path so its timing is the matmul, not np.where.
+        # Pre-mask ONCE: timing must be the matmul, not a per-call np.where copy (an earlier version did that and
+        # the 0%-sparsity row exposed it: "compact" looked 5x faster than dense on an identical network).
         Weff = [np.where(m, W, 0) for W, m in zip(Ws, masks)]
-        ones = [np.ones_like(m) for m in masks]
-        paths = {"dense": lambda x: dense_forward(x, Weff, ones, bs),
+        paths = {"dense": lambda x: dense_forward(x, Weff, bs),
                  "compact": s.forward_compact_dense, "csr": s.forward_csr}
         preds = {k: f(x_all).argmax(1) for k, f in paths.items()}
         acc = {k: float((p == y_all).mean()) for k, p in preds.items()}
