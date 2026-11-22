@@ -52,24 +52,8 @@ def main(argv=None):
     (out / "pareto.json").write_text(json.dumps({"seeds": a.seeds, "protocol": "15 epochs, final-epoch model",
                                                  "curves": table}, indent=2))
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(6.4, 4.2))
-    for meth, marker in zip(a.methods, "os^"):
-        pts = table[meth]
-        ax.errorbar([100 * p["achieved_sparsity"] for p in pts], [100 * p["mean"] for p in pts],
-                    yerr=[100 * p["std"] for p in pts], marker=marker, capsize=3, label=meth)
-    dense = table[a.methods[0]][0]
-    ax.axhline(100 * dense["mean"], color="0.6", ls="--", lw=1, label="dense (same protocol)")
-    ax.set(xlabel="achieved sparsity of weight matrices (%)", ylabel="final-epoch test accuracy (%)",
-           title=f"MNIST 784-256-128-10, mean ± std over seeds {a.seeds}")
-    ax.legend(loc="lower left")
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out / "pareto.png", dpi=140)
-    plt.close(fig)
+    from train.figures import plot_pareto
+    plot_pareto(table, a.seeds, out / "pareto.png")
     print(f"wrote {out}/pareto.json and pareto.png")
 
 
