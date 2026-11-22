@@ -1,100 +1,121 @@
 # AQUA — The Self-Pruning Network
 
-From-scratch NumPy reverse-mode autodiff + a network that prunes itself during training.
+A small reverse-mode autodiff engine written from scratch in NumPy, and an MLP built on it that prunes its own
+connections while it trains.
 
-## Restrictions honoured
-* No PyTorch / TensorFlow / JAX / Keras / HuggingFace / any autodiff, pruning or NN library.
-* **scikit-learn is used ONLY to download/load MNIST** (`fetch_openml`) in `train/data.py`.
-  It is never used for models, training, optimisation or gradients.
-* Autodiff engine, backward pass, optimizer, masking, pruning and training loop are all in this repo.
+## What's in here, and what isn't
+- No PyTorch, TensorFlow, JAX, Keras, HuggingFace, or any other autodiff, pruning or NN library.
+- **scikit-learn is only used to download and load MNIST** (`fetch_openml` in `train/data.py`). Nothing else: no
+  models, no training, no gradients.
+- The autodiff engine, backward pass, optimizer, masking, pruning and training loop are all my own code in this repo.
 
-## Layout
+## How to read this repo
+- **README** (this file): how to run everything, and the headline results.
+- **[DESIGN.md](DESIGN.md)**: the four questions from the brief, answered with what I measured.
+- **[notes.md](notes.md)**: my working log. I kept it as I went, step by step: what I expected, what actually
+  happened, the bugs I hit (including in my own tests and benchmarks), and why I made each decision. If you want to
+  know *why* something is the way it is, it's probably in there.
+- `results/`: every raw number and plot the docs quote.
+
 ```
 engine/    Tensor, Parameter (masked weights), ops, finite-difference gradcheck
 nn/        layers, mask-aware Adam, sparse inference path (compaction + CSR)
 prune/     importance criteria (saliency, fisher, magnitude), cubic schedule, mask manager + regrowth
 train/     data, training loop, Part 2/3 scripts, sweep, summary, Pareto, cost benchmark
 tests/     gradient checks, broadcast, softmax-CE, masked-weight correctness, pruning, sparse path
-results/   raw numbers + plots: part2_*, part3/ (every run), part4/ (Pareto, cost, saved models)
+results/   part2_* (dense run), part3/ (every pruning run), part4/ (Pareto, cost, saved models)
 ```
 
-## Run
+## Setup and tests
 ```bash
 uv venv --python 3.12 && uv pip install -r requirements.txt   # or: pip install -r requirements.txt (Python >= 3.10)
 python -m pytest -q                                  # all tests
-python -m pytest -q tests/test_gradcheck.py          # Part 1: gradient-check suite
+python -m pytest -q tests/test_gradcheck.py          # Part 1: gradient checks
 python -m pytest -q tests/test_masked.py             # Part 1: masked-weight correctness
-python -m tests.run                                  # stdlib-only fallback runner (no pytest needed)
+python -m tests.run                                  # same tests without pytest (stdlib only)
 ```
 
-**Part 2: dense training + learning curve** (first run downloads MNIST via sklearn and caches `data/mnist_784.npz`)
+## Reproducing each part
+
+**Part 2: dense training and learning curve.** The first run downloads MNIST through sklearn and caches it in
+`data/mnist_784.npz`.
 ```bash
 python -m train.train_dense --dataset mnist --epochs 20 --seed 0     # -> results/part2_mnist_seed0.{json,png}
-python -m train.init_study                                            # init justification -> results/init_study.json
+python -m train.init_study                                            # init numbers -> results/init_study.json
 ```
 
-**Part 3: self-pruning run** (Fisher criterion, 90% of weights removed)
+**Part 3: one self-pruning run** (Fisher criterion, 90% of the weights removed).
 ```bash
 python -m train.train_prune --target 0.9 --criterion fisher --seed 0  # -> results/part3/fisher_s90_seed0.{json,png}
 ```
-Other criteria with the same protocol: `--criterion saliency | magnitude`, `--target 0` for the dense reference,
-`--regrow` for regrowth. Protocol (identical for every run): 15 epochs; epochs 0-2 dense warmup, 2-10 cubic sparsity
-ramp with masks recomputed every 100 steps, 10-15 fine-tune with masks frozen at exactly the target; final-epoch
-model, test set touched once.
+Swap in `--criterion saliency` or `--criterion magnitude` to compare, use `--target 0` for the unpruned reference, and
+add `--regrow` to turn on regrowth. Every run follows the same 15-epoch schedule: 2 epochs dense, then a cubic ramp
+up to the target between epochs 2 and 10 (masks updated every 100 steps), then 5 epochs of fine-tuning with the masks
+frozen at exactly the target. I always report the final-epoch model, and the test set is only touched once.
 
-**Part 4: Pareto sweep** (fisher vs magnitude, 0/50/75/90/95%, seeds 0-2; ~25 runs, resumable, ~3 min each)
+**Part 4: Pareto sweep.** Fisher vs magnitude at 0/50/75/90/95% sparsity, seeds 0-2. That's about 25 runs of ~3
+minutes each; the sweep skips anything already in `results/`, so it can be stopped and restarted.
 ```bash
 python -m train.sweep --targets 0 0.5 0.75 0.9 0.95 --criteria fisher magnitude --seeds 0 1 2 --jobs 6 && python -m train.pareto
 ```
--> `results/part4/pareto.{json,png}`. The 90% comparison over 5 seeds (the falsifiable claim) and its paired tests:
+This writes `results/part4/pareto.{json,png}`. The 5-seed comparison at 90% behind the claim below:
 ```bash
 python -m train.sweep --targets 0 0.9 --criteria saliency fisher magnitude --seeds 0 1 2 3 4 --jobs 6 && python -m train.summarize
 ```
 
-**Part 4: real cost measurement** (sparse-aware paths vs dense; single-threaded, batch sizes 1 / 32 / 1000)
+**Part 4: cost measurement.** Trains and saves one model per sparsity, then times the dense, compacted and CSR
+inference paths single-threaded at batch sizes 1, 32 and 1000, and checks they all give the same predictions.
 ```bash
 python -m train.sweep --targets 0 0.5 0.75 0.9 0.95 --criteria fisher --seeds 0 --out results/part4 --save-model --jobs 5
 python -m train.sweep --targets 0.9 --criteria magnitude --seeds 0 --out results/part4 --save-model --jobs 1
 python -m train.bench_cost --models results/part4/models/*.npz       # -> results/part4/cost.json
 ```
-Reproducibility: every `python -m train.*` command pins BLAS to one thread (thread count changes float summation order
-and therefore the final model; see DESIGN.md appendix C). Numbers reproduce bit-for-bit on the same BLAS build.
-Training uses float32; gradient checks run in float64.
 
-## Results (details and derivations in DESIGN.md, working log in notes.md)
-| at 90% sparsity, n = 5 seeds | test acc | live weights |
+A note on reproducibility: every `python -m train.*` command pins BLAS to one thread. I found out the hard way that
+the thread count changes the order floats get summed in, and over a few thousand steps that's enough to end up with
+a different model (DESIGN.md, appendix C). With the pin, runs reproduce bit for bit on the same BLAS build. Training
+is float32; gradient checks run in float64.
+
+## Results
+
+At 90% sparsity, 5 seeds each:
+
+| | test accuracy | weights kept |
 |---|---|---|
-| dense (same 15-epoch protocol) | 97.81 ± 0.12% | 234,752 |
+| dense (same 15-epoch schedule) | 97.81 ± 0.12% | 234,752 |
 | saliency `EMA|w·g|` | 97.85 ± 0.10% | 23,475 |
 | fisher `w²·EMA(g²)` (the method) | 97.97 ± 0.13% | 23,475 |
-| magnitude `|w|` (baseline) | **98.13 ± 0.05%** | 23,475 |
+| magnitude `|w|` (the baseline) | **98.13 ± 0.05%** | 23,475 |
 
-**Three dense numbers, three different things, not a disagreement.** 97.87% is the Part 2 run: 20 epochs, seed 0 only.
-97.81 ± 0.12% is the dense reference under the 15-epoch pruning protocol, seeds 0-4 (the table above). 97.77 ± 0.14% is
-the same 15-epoch dense run averaged over seeds 0-2 only, so the Pareto curve uses the same seeds at every point.
+You'll see three different dense numbers in this repo, and they don't disagree. 97.87% is the Part 2 run (20 epochs,
+seed 0 only). 97.81 ± 0.12% is the dense reference under the 15-epoch pruning schedule over seeds 0-4, as in the table.
+97.77 ± 0.14% is the same 15-epoch run over seeds 0-2 only, so the Pareto curve uses the same seeds at every point.
 
-**Falsifiable claim.** At 90% sparsity on MNIST (784-256-128-10, this protocol), magnitude pruning retains
-98.13 ± 0.05% test accuracy vs 97.85 ± 0.10% for first-order saliency, averaged over 5 seeds; paired difference
-−0.28 pp, negative on 5/5 seeds, t = −6.64 (4 df). Fisher vs magnitude: −0.16 pp, t = −2.51 (not significant).
-Our importance-based criteria do **not** beat magnitude on accuracy here.
+**The falsifiable claim.** At 90% sparsity on MNIST (784-256-128-10, the schedule above), magnitude pruning keeps
+98.13 ± 0.05% test accuracy against 97.85 ± 0.10% for first-order saliency, over 5 seeds. Paired by seed, the
+difference is −0.28 points, negative on all 5 seeds, t = −6.64 (4 degrees of freedom). Fisher vs magnitude is −0.16
+points, t = −2.51, which isn't significant. So on accuracy, my importance-based criteria do **not** beat magnitude
+here. DESIGN.md §1.2 goes into why.
 
-**Cost.** Only structural removal turned into wall-clock speedup. Fisher's 90% model compacts to 434-203-126-10 and runs
-1.50× faster than dense at batch 1000 (2.43× at 95%), identical predictions. Magnitude's 90% model compacts to
-762-256-127-10 and is not faster (0.74×). Our CSR kernel does 10× fewer multiply-adds at 90% but is slower than dense
-BLAS at every batch size: in NumPy, unstructured sparsity is not a speedup.
+**Where Fisher does win is cost.** The only pruning that turned into real wall-clock speedup was the kind that removes
+whole rows and columns. Fisher's 90% model shrinks to 434-203-126-10 and runs 1.50× faster than dense at batch 1000
+(2.43× at 95%), with identical predictions. Magnitude's 90% model only shrinks to 762-256-127-10 and isn't any faster
+(0.74×). My CSR kernel does 10× fewer multiply-adds at 90% but is slower than dense BLAS at every batch size. In
+NumPy, unstructured sparsity just isn't a speedup.
 
 ## Status
-- [x] Step 1: autodiff engine, broadcast-correct backward, fused softmax-CE, mask-aware `Parameter` + Adam, tests
-- [x] Step 2: MLP (784-256-128-10, ReLU, He/LeCun init), Adam, loop, learning curve. Dense MNIST seed 0, 20 epochs:
-      **test acc 97.87%, test loss 0.100** (final-epoch model; `results/part2_mnist_seed0.json`). Val loss bottoms at
-      0.085 (epoch 7) and rises to 0.146 by epoch 20 while train loss falls to 0.004: the dense model overfits.
-      (An earlier Colab run of the same command gave 97.57%; different BLAS, see notes.md.)
-- [x] Step 3: saliency / Fisher / magnitude criteria, cubic ramp, global allocation with per-layer floor, exact hard
-      budget, regrowth with grace period (tested; no accuracy effect at 90%)
-- [x] Step 4: Pareto sweep 0-95% (3 seeds), 5-seed paired comparison at 90%, sparse-aware cost measurement, falsifiable claim
+- [x] Step 1: autodiff engine, broadcast-correct backward, fused softmax + cross-entropy, mask-aware `Parameter` and
+      Adam, tests.
+- [x] Step 2: MLP (784-256-128-10, ReLU, He/LeCun init), Adam, training loop, learning curve. Dense MNIST, seed 0,
+      20 epochs: **97.87% test accuracy, test loss 0.100** (final-epoch model; `results/part2_mnist_seed0.json`).
+      It overfits: validation loss bottoms at 0.085 around epoch 7 and climbs to 0.146 by epoch 20 while training loss
+      drops to 0.004. (My earlier Colab run of the same command gave 97.57%; different BLAS, see notes.md.)
+- [x] Step 3: saliency, Fisher and magnitude criteria; cubic ramp; global ranking with a per-layer floor; exact hard
+      budget; regrowth with a grace period (it works, but made no difference to accuracy at 90%).
+- [x] Step 4: Pareto sweep 0-95% (3 seeds), 5-seed paired comparison at 90%, real cost measurement, falsifiable claim.
 
 ## Masked weights in one paragraph
-`Parameter.masked()` returns `where(mask, w, 0)`. Backward stores **two** gradients: `grad = mask·g`
-(the only one the optimizer reads) and `dense_grad = g` (saliency / regrowth signal, never fed to the
-optimizer). Adam drops moments of pruned entries and restarts revived ones from zero state with a
-per-element step count. Details and measurements: `DESIGN.md`.
+`Parameter.masked()` returns `where(mask, w, 0)`, so a pruned weight is a real zero. On the way back I keep **two**
+gradients: `grad = mask · g` is the only one the optimizer ever sees, and `dense_grad = g` is the "what if this
+connection existed" signal that saliency and regrowth use. When a weight is pruned, Adam throws away its moments; if
+it comes back, it starts from a clean state with its own step count. DESIGN.md §2 has the details and measurements.
