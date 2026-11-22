@@ -146,3 +146,11 @@ What I take from it:
 - The train-loss clue lines up nicely: fisher's train loss sits between saliency and magnitude, in the same order as test accuracy. So the ranking of criteria is really about how well they keep the weights the training loss needs.
 - It doesn't overturn the result. **Magnitude is still the best criterion I have at 90% on MNIST.** The honest falsifiable claim stays the magnitude one.
 - Memory-length idea still fits: fisher's EMA window is the same ~100 steps, and magnitude still has the whole run baked in. Didn't test a longer window on purpose — that would be tuning after seeing results.
+
+### Decision: Fisher is "the method" from here on — picked after seeing the 90% results
+- Saying this plainly: I chose Fisher over first-order saliency **after** looking at the 90% numbers. It's a choice between two of my own variants tested the same way, and magnitude stays the baseline — but it does mean the Pareto results for Fisher aren't a fully independent confirmation. They're the method I just selected.
+- Reasons beyond "it scored higher": it's the term the derivation says should matter near convergence, and it was never worse than saliency on any seed.
+- Claims I'll report, both of them, not just the nicer one:
+  1. At 90%, magnitude 98.17 ± 0.07% vs saliency 97.83 ± 0.19%, paired −0.34 pp, t = −3.91, n = 5 (significant).
+  2. Fisher 97.97 ± 0.13%: vs magnitude −0.20 pp, t = −2.67 (not significant, behind on 5/5); vs saliency +0.14 pp, t = 2.79 (borderline — consistent with the derivation, not a strong win).
+- Regrowth gets tested on Fisher only, Fisher+regrowth vs Fisher, 90%, 5 seeds.
