@@ -128,3 +128,21 @@ Applies to whichever of saliency / fisher ends up as "the method"; compared agai
 - **When / how many:** at each epoch boundary after warmup, revive `k = max(10% of weights pruned during that epoch, 0.5% of live weights)`, and prune the `k` lowest-scoring live weights at the same time — so sparsity stays exactly on schedule (a swap, not extra capacity).
 - **Revived at 0 with fresh Adam state** (already how `set_mask` + Adam work).
 - **Grace period: revived weights can't be pruned for one epoch.** Caught this while writing the rule — a revived weight is at 0, so its saliency/fisher score is 0 and the very next prune event would kill it again. Without the grace period regrowth would silently do nothing.
+
+### Second-order result (5 seeds, 90%)
+| run | test acc (mean ± std, n=5) | min – max | final train loss |
+|---|---|---|---|
+| dense | 97.61 ± 0.17 | 97.32 – 97.77 | — |
+| saliency (1st order) | 97.83 ± 0.19 | 97.52 – 97.97 | ~0.010 |
+| fisher (2nd order) | 97.97 ± 0.13 | 97.82 – 98.13 | ~0.0061–0.0076 |
+| magnitude | **98.17 ± 0.07** | 98.09 – 98.26 | ~0.0055 |
+
+Paired by seed:
+- **fisher − magnitude:** −0.03, −0.29, −0.37, −0.01, −0.30 → mean **−0.20 pp**, t = −2.67 (crit 2.78). Not significant at 5% — but still behind on 5/5 seeds, so I'm not calling it a tie either. "Not significant" with n=5 isn't "equal".
+- **fisher − saliency:** +0.16, +0.30, +0.10, +0.12, 0.00 → mean **+0.14 pp**, t = 2.79 (crit 2.78). Borderline significant, never worse on any seed.
+
+What I take from it:
+- Second order does what the derivation predicts: it fixes part of the late-training problem. It closes ~40% of the gap to magnitude (−0.34 → −0.20).
+- The train-loss clue lines up nicely: fisher's train loss sits between saliency and magnitude, in the same order as test accuracy. So the ranking of criteria is really about how well they keep the weights the training loss needs.
+- It doesn't overturn the result. **Magnitude is still the best criterion I have at 90% on MNIST.** The honest falsifiable claim stays the magnitude one.
+- Memory-length idea still fits: fisher's EMA window is the same ~100 steps, and magnitude still has the whole run baked in. Didn't test a longer window on purpose — that would be tuning after seeing results.
