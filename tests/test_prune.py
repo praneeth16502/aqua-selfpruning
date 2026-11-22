@@ -194,3 +194,64 @@ def test_fisher_is_w_squared_times_ema_of_g_squared_and_survives_cancelling_grad
     ema = (0.25 * np.array([1.0, 1.0]) + 0.5 * np.array([1.0, 9.0])) / 0.75
     np.testing.assert_allclose(f.scores([p])[0], p.data ** 2 * ema)
     assert f.scores([p])[0][0, 0] > 0           # mean g for w0 is 0, but E[g^2] is not
+
+
+# ---------------------------------------------------------------- regrowth
+def _pruned_manager(grace=None, regrow_frac=0.5):
+    from prune import Fisher
+    p = Parameter(np.arange(1.0, 41.0).reshape(4, 10))   # bigger index = bigger weight = higher fisher score
+    mgr = PruneManager([p], Fisher(decay=0.0), final_sparsity=0.5, start_step=0, end_step=10, every=10,
+                       min_density=0.0, regrow=True, regrow_every=5, regrow_frac=regrow_frac, regrow_min=0.0,
+                       grace=grace)
+    p.dense_grad = np.ones_like(p.data)
+    mgr.on_backward(0)
+    mgr.prune_to(0.5, step=10)                             # keeps the 20 largest (indices 20..39)
+    return p, mgr
+
+
+def test_regrow_swap_keeps_count_and_revives_by_dense_grad():
+    p, mgr = _pruned_manager()
+    live0 = mgr.active()
+    g = np.zeros_like(p.data)
+    g.ravel()[[3, 7]] = 5.0                                # two dead weights with large gradient signal
+    p.dense_grad = g
+    mgr.on_backward(11)
+    k = mgr.regrow_swap(step=14)
+    assert k == 10                                         # 50% of the 20 pruned since the last swap
+    assert mgr.active() == live0                           # a swap, not extra capacity
+    assert p.mask.ravel()[3] and p.mask.ravel()[7]         # highest |dense_grad| came back first
+    assert np.all(p.data[p.mask & mgr.ever_revived[0]] == 0.0)   # revived at exactly 0
+    assert mgr.regrowth_stats()["unique_revived"] == 10
+
+
+def test_grace_period_protects_revived_weights_and_without_it_they_die_immediately():
+    for grace, survive in ((5, True), (0, False)):
+        p, mgr = _pruned_manager(grace=grace, regrow_frac=0.05)   # k = 1: only the planted weight comes back
+        g = np.zeros_like(p.data)
+        g.ravel()[3] = 5.0
+        p.dense_grad = g
+        mgr.on_backward(11)
+        mgr.regrow_swap(step=14)
+        assert p.mask.ravel()[3]
+        p.dense_grad = np.ones_like(p.data)
+        mgr.on_backward(12)
+        mgr.prune_to(0.6, step=15)                         # revived weight has w=0 -> fisher score 0
+        assert bool(p.mask.ravel()[3]) == survive, (grace, survive)
+
+
+def test_regrowth_end_to_end_keeps_exact_budget_and_floors():
+    from prune import Fisher
+    data = _blobs()
+    m = MLP([10, 64, 32, 3], np.random.default_rng(0))
+    params = m.prunable()
+    total = sum(p.data.size for p in params)
+    mgr = PruneManager(params, Fisher(), 0.9, start_step=15, end_step=75, every=10, min_density=0.05,
+                       regrow=True, regrow_every=15)
+    train(m, data, epochs=12, batch_size=32, lr=1e-2, seed=0, log=None,
+          on_backward=mgr.on_backward, on_step=mgr.on_step)
+    assert mgr.active() == total - round(0.9 * total)
+    assert all(e["sparsity"] >= 0.9 - 1e-12 or e["step"] < mgr.end for e in mgr.regrow_events)
+    assert len(mgr.regrow_events) > 5 and mgr.regrowth_stats()["unique_revived"] > 0
+    assert all(s <= 0.95 + 1e-12 for s in mgr.layer_sparsity())
+    for p in params:
+        assert np.all(p.data[~p.mask] == 0.0)
